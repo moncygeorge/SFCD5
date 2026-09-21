@@ -154,9 +154,12 @@ def admin_login():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
-        if 'username' in session:
-            return redirect(url_for('vote'))
-        next_url = request.args.get('next', '') or url_for('vote')
+        next_url = request.args.get('next', '').strip() or url_for('vote')
+        # Keep redirects local and preserve the specific reusable ballot URL.
+        if not next_url.startswith('/') or next_url.startswith('//'):
+            next_url = url_for('vote')
+        if 'username' in session and not session.get('is_admin'):
+            return redirect(next_url)
         return render_template('login.html', next=next_url)
 
     session.clear()
@@ -164,8 +167,8 @@ def login():
     phone    = ''.join(phone.split())
     next_url = request.form.get('next', '').strip()
 
-    # only allow relative redirects, never an external URL
-    if not next_url.startswith('/'):
+    # only allow local relative redirects, never an external URL
+    if not next_url.startswith('/') or next_url.startswith('//'):
         next_url = url_for('vote')
 
     if not phone:
