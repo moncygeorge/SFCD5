@@ -830,6 +830,47 @@ def admin_toggle_phase(pid):
         conn.execute("UPDATE election_phases SET status='open',opened_at=CURRENT_TIMESTAMP,closed_at=NULL WHERE id=?",(pid,))
     conn.commit(); conn.close(); return redirect(url_for('admin_dashboard'))
 
+
+@app.route('/admin/election/phase/<int:pid>/delete', methods=['POST'])
+def admin_delete_phase(pid):
+    if not admin_required():
+        return redirect(url_for('admin_login'))
+
+    conn = get_db()
+    phase = conn.execute(
+        "SELECT * FROM election_phases WHERE id=?", (pid,)
+    ).fetchone()
+
+    if not phase:
+        conn.close()
+        flash('Voting phase not found.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    # Never allow deletion while a phase is actively accepting votes.
+    if phase['status'] == 'open':
+        conn.close()
+        flash('Close the voting phase before deleting it.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # Delete anonymous ballots and voter participation records first,
+        # followed by candidates and then the phase itself.
+        conn.execute("DELETE FROM election_ballots WHERE phase_id=?", (pid,))
+        conn.execute("DELETE FROM election_voter_status WHERE phase_id=?", (pid,))
+        conn.execute("DELETE FROM election_candidates WHERE phase_id=?", (pid,))
+        conn.execute("DELETE FROM election_phases WHERE id=?", (pid,))
+        conn.commit()
+        flash(f"{phase['position']} phase and its voting data were deleted.", 'success')
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return redirect(url_for('admin_dashboard'))
+
+
 @app.route('/admin/election/phase/<int:pid>/results')
 def admin_phase_results(pid):
     if not admin_required(): return redirect(url_for('admin_login'))
