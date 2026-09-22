@@ -33,8 +33,16 @@
 <span class="status {{ 'status-open' if p.status == 'open' else 'status-closed' }}">{{ p.status|upper }}</span>
 <span class="muted">Votes: {{ p.vote_count or 0 }}</span></div>
 <div class="phase-actions">
-<form method="post" action="/admin/election/phase/{{ p.id }}/toggle"><button>{{ 'Close Phase' if p.status == 'open' else 'Open Phase' }}</button></form>
+<form method="post" action="/admin/election/phase/{{ p.id }}/toggle">
+  <button>{{ 'Close Phase' if p.status == 'open' else 'Open Phase' }}</button>
+</form>
 <a class="btn secondary" href="/admin/election/phase/{{ p.id }}/results">Results</a>
+{% if p.status != 'open' %}
+<form method="post" action="/admin/election/phase/{{ p.id }}/delete"
+      onsubmit="return confirm('Delete {{ p.position|e }}? This permanently deletes this phase, its candidates, vote count, ballots, and voter participation records. This cannot be undone.');">
+  <button class="delete-phase" type="submit">Delete Phase</button>
+</form>
+{% endif %}
 </div></div>
 {% else %}<p class="muted">No voting phases have been created yet.</p>{% endfor %}
 </div></div>
@@ -65,7 +73,7 @@
 .status-open{background:#dff3e4;color:#176b32}.status-closed{background:#eceff2;color:#59636e}
 .phase-list{display:grid;gap:12px}.phase-row{border:1px solid #e0e4e8;border-radius:10px;padding:14px;display:flex;justify-content:space-between;align-items:center;gap:16px}
 .phase-info,.phase-actions,.button-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.phase-actions form{margin:0}
-.secondary{background:#eef2f5!important;color:#17324d!important}.danger{background:#9b2c2c!important}
+.secondary{background:#eef2f5!important;color:#17324d!important}.danger{background:#9b2c2c!important}.delete-phase{background:#fff!important;color:#9b2c2c!important;border:1px solid #9b2c2c!important}
 @media(max-width:650px){.phase-row{align-items:stretch;flex-direction:column}.phase-actions{align-items:stretch}}
 </style>
 
