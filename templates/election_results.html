@@ -1,0 +1,1 @@
+<!doctype html><html><body style="font-family:Arial"><main style="max-width:600px;margin:40px auto"><h1>{{ phase.position }} Results</h1><p>Total ballots: {{ total }}</p><table style="width:100%">{% for r in tally %}<tr><td>{{ r.name }}</td><td>{{ r.cnt }}</td></tr>{% endfor %}</table><p><a href="/admin_dashboard">Back</a></p></main></body></html>
