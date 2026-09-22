@@ -875,7 +875,7 @@ def admin_delete_phase(pid):
 def admin_phase_results(pid):
     if not admin_required(): return redirect(url_for('admin_login'))
     conn=get_db(); p=conn.execute("SELECT * FROM election_phases WHERE id=?",(pid,)).fetchone()
-    tally=conn.execute("SELECT c.name,COUNT(b.id) cnt FROM election_candidates c LEFT JOIN election_ballots b ON b.candidate_id=c.id WHERE c.phase_id=? GROUP BY c.id,c.name ORDER BY cnt DESC,c.id",(pid,)).fetchall()
+    tally=conn.execute("SELECT c.name,COUNT(b.id) cnt FROM election_candidates c LEFT JOIN election_ballots b ON b.candidate_id=c.id WHERE c.phase_id=? GROUP BY c.id,c.name ORDER BY cnt DESC, c.name COLLATE NOCASE ASC",(pid,)).fetchall()
     total=conn.execute("SELECT COUNT(*) cnt FROM election_ballots WHERE phase_id=?",(pid,)).fetchone()['cnt']; conn.close()
     return render_template('election_results.html',phase=p,tally=tally,total=total)
 
