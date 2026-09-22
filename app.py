@@ -3,6 +3,8 @@ import os
 import uuid
 import csv
 import io
+import secrets
+import time
 from werkzeug.utils import secure_filename
 from flask import Flask, render_template, render_template_string, request, redirect, url_for, flash, session, jsonify, send_file, make_response
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -154,12 +156,9 @@ def admin_login():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
-        next_url = request.args.get('next', '').strip() or url_for('vote')
-        # Keep redirects local and preserve the specific reusable ballot URL.
-        if not next_url.startswith('/') or next_url.startswith('//'):
-            next_url = url_for('vote')
-        if 'username' in session and not session.get('is_admin'):
-            return redirect(next_url)
+        if 'username' in session:
+            return redirect(url_for('vote'))
+        next_url = request.args.get('next', '') or url_for('vote')
         return render_template('login.html', next=next_url)
 
     session.clear()
@@ -167,8 +166,8 @@ def login():
     phone    = ''.join(phone.split())
     next_url = request.form.get('next', '').strip()
 
-    # only allow local relative redirects, never an external URL
-    if not next_url.startswith('/') or next_url.startswith('//'):
+    # only allow relative redirects, never an external URL
+    if not next_url.startswith('/'):
         next_url = url_for('vote')
 
     if not phone:
@@ -680,6 +679,166 @@ def submit_vote_api():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+# ── Phased election session ────────────────────────────────────────────────────
+ELECTION_OTP_TTL = 300
+ELECTION_AUTH_TTL = 14400
+
+def ensure_election_tables():
+    conn=get_db()
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS election_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'closed',created_at DATETIME DEFAULT CURRENT_TIMESTAMP,opened_at DATETIME,closed_at DATETIME);
+    CREATE TABLE IF NOT EXISTS election_phases (id INTEGER PRIMARY KEY AUTOINCREMENT,session_id INTEGER NOT NULL,position TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'closed',opened_at DATETIME,closed_at DATETIME);
+    CREATE TABLE IF NOT EXISTS election_candidates (id INTEGER PRIMARY KEY AUTOINCREMENT,phase_id INTEGER NOT NULL,name TEXT NOT NULL,UNIQUE(phase_id,name));
+    CREATE TABLE IF NOT EXISTS election_voter_status (id INTEGER PRIMARY KEY AUTOINCREMENT,phase_id INTEGER NOT NULL,voter_id INTEGER NOT NULL,voted_at DATETIME DEFAULT CURRENT_TIMESTAMP,UNIQUE(phase_id,voter_id));
+    CREATE TABLE IF NOT EXISTS election_ballots (id INTEGER PRIMARY KEY AUTOINCREMENT,phase_id INTEGER NOT NULL,candidate_id INTEGER NOT NULL,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS election_otp (id INTEGER PRIMARY KEY AUTOINCREMENT,voter_id INTEGER NOT NULL,code_hash TEXT NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    """); conn.commit(); conn.close()
+ensure_election_tables()
+
+def current_election(conn):
+    return conn.execute("SELECT * FROM election_sessions WHERE status='open' ORDER BY id DESC LIMIT 1").fetchone()
+
+def current_phase(conn,eid):
+    return conn.execute("SELECT * FROM election_phases WHERE session_id=? AND status='open' ORDER BY id DESC LIMIT 1",(eid,)).fetchone()
+
+def election_verified():
+    return bool(session.get('election_voter_id') and int(time.time())-int(session.get('election_verified_at',0)) <= ELECTION_AUTH_TTL)
+
+def send_election_otp(phone, code):
+    # TEST MODE: code is written to the SFCD5 service log.
+    # Replace this function with Twilio before production.
+    print(f"[SFCD OTP] {phone}: {code}", flush=True)
+    return True
+
+@app.route('/election')
+def election_home():
+    conn=get_db(); e=current_election(conn)
+    if not e:
+        conn.close(); return render_template('election_wait.html',election=None,message='The voting session is currently closed.')
+    if not election_verified():
+        conn.close(); return redirect(url_for('election_login'))
+    p=current_phase(conn,e['id'])
+    if not p:
+        conn.close(); return render_template('election_wait.html',election=e,message='You are verified. Please wait for the next voting phase.')
+    voter=session['election_voter_id']
+    voted=conn.execute("SELECT 1 FROM election_voter_status WHERE phase_id=? AND voter_id=?",(p['id'],voter)).fetchone()
+    candidates=conn.execute("SELECT id,name FROM election_candidates WHERE phase_id=? ORDER BY id",(p['id'],)).fetchall()
+    conn.close()
+    if voted:
+        return render_template('election_wait.html',election=e,phase=p,message=f"Your vote for {p['position']} has been recorded. Please wait for the next voting phase.")
+    return render_template('election_ballot.html',election=e,phase=p,candidates=candidates)
+
+@app.route('/election/status')
+def election_status():
+    conn=get_db(); e=current_election(conn); p=current_phase(conn,e['id']) if e else None; conn.close()
+    return jsonify(session_open=bool(e),session_id=e['id'] if e else None,phase_id=p['id'] if p else None,position=p['position'] if p else None)
+
+@app.route('/election/login',methods=['GET','POST'])
+def election_login():
+    if request.method=='GET': return render_template('election_login.html')
+    phone=''.join(request.form.get('phone','').split())
+    conn=get_db(); e=current_election(conn); voter=conn.execute("SELECT id,phone_number FROM users WHERE phone_number=?",(phone,)).fetchone()
+    if not e:
+        conn.close(); flash('The voting session is currently closed.','danger'); return redirect(url_for('election_login'))
+    if not voter:
+        conn.close(); flash('This phone number is not registered to vote.','danger'); return redirect(url_for('election_login'))
+    code=f"{secrets.randbelow(1000000):06d}"
+    conn.execute("UPDATE election_otp SET used=1 WHERE voter_id=? AND used=0",(voter['id'],))
+    conn.execute("INSERT INTO election_otp(voter_id,code_hash,expires_at) VALUES(?,?,?)",(voter['id'],generate_password_hash(code),int(time.time())+ELECTION_OTP_TTL))
+    conn.commit(); conn.close()
+    send_election_otp(phone,code)
+    session['pending_election_voter_id']=voter['id']; session['pending_election_phone']=phone
+    return redirect(url_for('election_verify'))
+
+@app.route('/election/verify',methods=['GET','POST'])
+def election_verify():
+    voter=session.get('pending_election_voter_id')
+    if not voter: return redirect(url_for('election_login'))
+    if request.method=='GET': return render_template('election_verify.html',phone=session.get('pending_election_phone'))
+    code=request.form.get('code','').strip(); conn=get_db()
+    otp=conn.execute("SELECT * FROM election_otp WHERE voter_id=? AND used=0 ORDER BY id DESC LIMIT 1",(voter,)).fetchone()
+    if not otp or otp['expires_at']<int(time.time()) or otp['attempts']>=5:
+        conn.close(); flash('Verification code expired. Request a new one.','danger'); return redirect(url_for('election_login'))
+    if not check_password_hash(otp['code_hash'],code):
+        conn.execute("UPDATE election_otp SET attempts=attempts+1 WHERE id=?",(otp['id'],)); conn.commit(); conn.close()
+        flash('Invalid verification code.','danger'); return redirect(url_for('election_verify'))
+    conn.execute("UPDATE election_otp SET used=1 WHERE id=?",(otp['id'],)); conn.commit(); conn.close()
+    session.pop('pending_election_voter_id',None); session.pop('pending_election_phone',None)
+    session['election_voter_id']=voter; session['election_verified_at']=int(time.time())
+    return redirect(url_for('election_home'))
+
+@app.route('/election/vote',methods=['POST'])
+def election_vote():
+    if not election_verified(): return redirect(url_for('election_login'))
+    cid=request.form.get('candidate_id',type=int); voter=session['election_voter_id']; conn=get_db(); e=current_election(conn); p=current_phase(conn,e['id']) if e else None
+    if not e or not p:
+        conn.close(); flash('Voting is not currently open.','danger'); return redirect(url_for('election_home'))
+    valid=conn.execute("SELECT 1 FROM election_candidates WHERE id=? AND phase_id=?",(cid,p['id'])).fetchone()
+    if not valid:
+        conn.close(); flash('Select a valid candidate.','danger'); return redirect(url_for('election_home'))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO election_voter_status(phase_id,voter_id) VALUES(?,?)",(p['id'],voter))
+        conn.execute("INSERT INTO election_ballots(phase_id,candidate_id) VALUES(?,?)",(p['id'],cid))
+        conn.commit(); flash('Your vote has been recorded.','success')
+    except sqlite3.IntegrityError:
+        conn.rollback(); flash('You have already voted in this phase.','warning')
+    finally: conn.close()
+    return redirect(url_for('election_home'))
+
+@app.route('/admin/election/create',methods=['POST'])
+def admin_create_election():
+    if not admin_required(): return redirect(url_for('admin_login'))
+    title=request.form.get('title','').strip()
+    if not title: flash('Election title is required.','danger'); return redirect(url_for('admin_dashboard'))
+    conn=get_db(); conn.execute("INSERT INTO election_sessions(title) VALUES(?)",(title,)); conn.commit(); conn.close()
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/election/<int:eid>/toggle',methods=['POST'])
+def admin_toggle_election(eid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    conn=get_db(); e=conn.execute("SELECT * FROM election_sessions WHERE id=?",(eid,)).fetchone()
+    if not e: conn.close(); return 'Election not found',404
+    if e['status']=='open':
+        conn.execute("UPDATE election_phases SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE session_id=? AND status='open'",(eid,))
+        conn.execute("UPDATE election_sessions SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE id=?",(eid,))
+    else:
+        conn.execute("UPDATE election_sessions SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE status='open'")
+        conn.execute("UPDATE election_sessions SET status='open',opened_at=CURRENT_TIMESTAMP,closed_at=NULL WHERE id=?",(eid,))
+    conn.commit(); conn.close(); return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/election/<int:eid>/phase/create',methods=['POST'])
+def admin_create_phase(eid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    position=request.form.get('position','').strip(); names=[x.strip() for x in request.form.get('candidates','').splitlines() if x.strip()]
+    if not position or len(names)<2: flash('Position and at least two candidates are required.','danger'); return redirect(url_for('admin_dashboard'))
+    conn=get_db(); cur=conn.execute("INSERT INTO election_phases(session_id,position) VALUES(?,?)",(eid,position)); pid=cur.lastrowid
+    conn.executemany("INSERT INTO election_candidates(phase_id,name) VALUES(?,?)",[(pid,n) for n in names]); conn.commit(); conn.close()
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/election/phase/<int:pid>/toggle',methods=['POST'])
+def admin_toggle_phase(pid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    conn=get_db(); p=conn.execute("SELECT * FROM election_phases WHERE id=?",(pid,)).fetchone()
+    if not p: conn.close(); return 'Phase not found',404
+    e=conn.execute("SELECT * FROM election_sessions WHERE id=?",(p['session_id'],)).fetchone()
+    if not e or e['status']!='open': conn.close(); flash('Open the voting session first.','danger'); return redirect(url_for('admin_dashboard'))
+    if p['status']=='open': conn.execute("UPDATE election_phases SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE id=?",(pid,))
+    else:
+        conn.execute("UPDATE election_phases SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE session_id=? AND status='open'",(p['session_id'],))
+        conn.execute("UPDATE election_phases SET status='open',opened_at=CURRENT_TIMESTAMP,closed_at=NULL WHERE id=?",(pid,))
+    conn.commit(); conn.close(); return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/election/phase/<int:pid>/results')
+def admin_phase_results(pid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    conn=get_db(); p=conn.execute("SELECT * FROM election_phases WHERE id=?",(pid,)).fetchone()
+    tally=conn.execute("SELECT c.name,COUNT(b.id) cnt FROM election_candidates c LEFT JOIN election_ballots b ON b.candidate_id=c.id WHERE c.phase_id=? GROUP BY c.id,c.name ORDER BY cnt DESC,c.id",(pid,)).fetchall()
+    total=conn.execute("SELECT COUNT(*) cnt FROM election_ballots WHERE phase_id=?",(pid,)).fetchone()['cnt']; conn.close()
+    return render_template('election_results.html',phase=p,tally=tally,total=total)
+
+
 # ── SFCD5 reusable voting-event links ─────────────────────────────────────────
 def ensure_voting_event_tables():
     conn = get_db()
@@ -789,6 +948,9 @@ def admin_dashboard():
         ORDER BY e.created_at DESC
     """).fetchall()
     voting_events = conn.execute("SELECT ve.*, COUNT(v.id) AS vote_count FROM voting_events ve LEFT JOIN voting_event_votes v ON v.event_id=ve.id GROUP BY ve.id ORDER BY ve.created_at DESC").fetchall()
+    election_sessions = conn.execute("SELECT * FROM election_sessions ORDER BY id DESC").fetchall()
+    election_phases = conn.execute("SELECT p.*,COUNT(v.id) vote_count FROM election_phases p LEFT JOIN election_voter_status v ON v.phase_id=p.id GROUP BY p.id ORDER BY p.id").fetchall()
+    registered_voter_count = conn.execute("SELECT COUNT(*) cnt FROM users").fetchone()['cnt']
     conn.close()
 
     return render_template(
@@ -797,6 +959,9 @@ def admin_dashboard():
         voting_open=voting_open,
         events=events,
         voting_events=voting_events,
+        election_sessions=election_sessions,
+        election_phases=election_phases,
+        registered_voter_count=registered_voter_count,
         created=request.args.get('created', type=int),
         vote_created=request.args.get('vote_created', type=int)
     )
