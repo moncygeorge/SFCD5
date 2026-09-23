@@ -1,1 +1,95 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ phase.position }}</title></head><body style="font-family:Arial;background:#f4f6f8"><main style="max-width:540px;margin:40px auto;background:white;padding:28px;border-radius:14px"><p>{{ election.title }}</p><h1>{{ phase.position }}</h1>{% for cat,msg in get_flashed_messages(with_categories=true) %}<p>{{ msg }}</p>{% endfor %}<form method="post" action="{{ url_for('election_vote') }}">{% for c in candidates %}<label style="display:block;padding:14px;margin:10px 0;border:1px solid #ccc;border-radius:8px"><input type="radio" name="candidate_id" value="{{ c.id }}" required> {{ c.name }}</label>{% endfor %}<button style="width:100%;padding:14px">Submit Vote</button></form></main><script>let p={{ phase.id }};setInterval(async()=>{try{let d=await(await fetch('/election/status',{cache:'no-store'})).json();if(!d.session_open||d.phase_id!==p)location.reload()}catch(e){}},3000)</script></body></html>
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ phase.position }} - SFCD Voting</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:Arial,sans-serif;background:#f4f6f8;color:#243447;margin:0}
+.wrap{max-width:980px;margin:24px auto;padding:14px}
+.card{background:#fff;padding:24px;border-radius:14px;box-shadow:0 2px 12px #0002}
+.church{color:#667;margin:0 0 6px}
+h1{margin:0 0 8px}
+.instructions{margin:0 0 18px;color:#667}
+.flash{padding:11px 13px;background:#fff4cc;border-radius:8px;margin:10px 0}
+.candidate-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0 92px}
+.candidate-card{position:relative;display:flex;align-items:center;min-height:64px;padding:14px 16px;border:2px solid #d6dce2;border-radius:10px;background:#fff;cursor:pointer;transition:.15s ease;user-select:none}
+.candidate-card:hover{border-color:#9aa8b5;background:#f8fafb}
+.candidate-card input{position:absolute;opacity:0;pointer-events:none}
+.candidate-name{font-size:17px;font-weight:600;line-height:1.25;padding-left:30px}
+.candidate-card::before{content:"";position:absolute;left:14px;width:18px;height:18px;border:2px solid #8a98a6;border-radius:50%;background:white}
+.candidate-card.selected{border-color:#17324d;background:#edf4f8}
+.candidate-card.selected::before{content:"✓";display:flex;align-items:center;justify-content:center;color:white;background:#17324d;border-color:#17324d;font-size:13px;font-weight:bold}
+.submit-bar{position:sticky;bottom:0;background:linear-gradient(to top,#fff 75%,rgba(255,255,255,0));padding:22px 0 4px}
+button{width:100%;padding:15px;background:#17324d;color:white;border:0;border-radius:9px;font-size:18px;font-weight:700;cursor:pointer}
+button:disabled{opacity:.55;cursor:not-allowed}
+.selection-summary{text-align:center;margin:0 0 10px;color:#465564;min-height:20px;font-weight:600}
+@media(max-width:800px){.candidate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:480px){.wrap{padding:10px}.card{padding:18px}.candidate-grid{grid-template-columns:1fr;gap:10px}.candidate-card{min-height:58px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="card">
+<p class="church">{{ election.title }}</p>
+<h1>{{ phase.position }}</h1>
+<p class="instructions">Select one candidate, then submit your vote.</p>
+
+{% with messages=get_flashed_messages(with_categories=true) %}
+{% for cat,msg in messages %}<div class="flash">{{ msg }}</div>{% endfor %}
+{% endwith %}
+
+<form method="post" action="{{ url_for('election_vote') }}" id="voteForm">
+<div class="candidate-grid">
+{% for c in candidates %}
+<label class="candidate-card" data-name="{{ c.name|e }}">
+<input type="radio" name="candidate_id" value="{{ c.id }}" required>
+<span class="candidate-name">{{ c.name }}</span>
+</label>
+{% endfor %}
+</div>
+
+<div class="submit-bar">
+<div class="selection-summary" id="selectionSummary">No candidate selected</div>
+<button type="submit" id="submitButton" disabled>Submit Vote</button>
+</div>
+</form>
+</div>
+</div>
+
+<script>
+const cards=document.querySelectorAll('.candidate-card');
+const summary=document.getElementById('selectionSummary');
+const submitButton=document.getElementById('submitButton');
+const form=document.getElementById('voteForm');
+let selectedName='';
+
+cards.forEach(card=>{
+  const radio=card.querySelector('input[type="radio"]');
+  card.addEventListener('click',()=>{
+    cards.forEach(c=>c.classList.remove('selected'));
+    radio.checked=true;
+    card.classList.add('selected');
+    selectedName=card.dataset.name||'';
+    summary.textContent='Selected: '+selectedName;
+    submitButton.disabled=false;
+  });
+});
+
+form.addEventListener('submit',(event)=>{
+  if(!selectedName){event.preventDefault();return;}
+  if(!window.confirm('You selected "'+selectedName+'". Submit this vote?')) event.preventDefault();
+});
+
+let currentPhase={{ phase.id }};
+setInterval(async()=>{
+  try{
+    const response=await fetch('/election/status',{cache:'no-store'});
+    const data=await response.json();
+    if(!data.session_open||data.phase_id!==currentPhase) location.reload();
+  }catch(e){}
+},3000);
+</script>
+</body>
+</html>
