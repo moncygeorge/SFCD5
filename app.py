@@ -67,8 +67,12 @@ with app.app_context():
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def get_db():
-    conn = sqlite3.connect(DB_FILE)
+    # Wait briefly for another Gunicorn worker to finish a write instead of
+    # immediately raising "database is locked".
+    conn = sqlite3.connect(DB_FILE, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=15000")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
@@ -693,8 +697,26 @@ def ensure_election_tables():
     CREATE TABLE IF NOT EXISTS election_voter_status (id INTEGER PRIMARY KEY AUTOINCREMENT,phase_id INTEGER NOT NULL,voter_id INTEGER NOT NULL,voted_at DATETIME DEFAULT CURRENT_TIMESTAMP,UNIQUE(phase_id,voter_id));
     CREATE TABLE IF NOT EXISTS election_ballots (id INTEGER PRIMARY KEY AUTOINCREMENT,phase_id INTEGER NOT NULL,candidate_id INTEGER NOT NULL,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS election_otp (id INTEGER PRIMARY KEY AUTOINCREMENT,voter_id INTEGER NOT NULL,code_hash TEXT NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS election_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      actor TEXT,
+      election_id INTEGER,
+      phase_id INTEGER,
+      details TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
     """); conn.commit(); conn.close()
 ensure_election_tables()
+
+def election_audit(event_type, actor=None, election_id=None, phase_id=None, details=None):
+    try:
+        conn=get_db()
+        conn.execute("INSERT INTO election_audit(event_type,actor,election_id,phase_id,details) VALUES(?,?,?,?,?)",
+                     (event_type,actor,election_id,phase_id,details))
+        conn.commit(); conn.close()
+    except Exception:
+        app.logger.exception("Unable to write election audit event")
 
 def current_election(conn):
     return conn.execute("SELECT * FROM election_sessions WHERE status='open' ORDER BY id DESC LIMIT 1").fetchone()
@@ -778,10 +800,10 @@ def election_vote():
     if not valid:
         conn.close(); flash('Select a valid candidate.','danger'); return redirect(url_for('election_home'))
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("BEGIN")
         conn.execute("INSERT INTO election_voter_status(phase_id,voter_id) VALUES(?,?)",(p['id'],voter))
         conn.execute("INSERT INTO election_ballots(phase_id,candidate_id) VALUES(?,?)",(p['id'],cid))
-        conn.commit(); flash('Your vote has been recorded.','success')
+        conn.commit(); election_audit('BALLOT_CAST',f'voter:{voter}',e['id'],p['id'],'ballot accepted; candidate not logged'); flash('Your vote has been recorded.','success')
     except sqlite3.IntegrityError:
         conn.rollback(); flash('You have already voted in this phase.','warning')
     finally: conn.close()
@@ -806,15 +828,43 @@ def admin_toggle_election(eid):
     else:
         conn.execute("UPDATE election_sessions SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE status='open'")
         conn.execute("UPDATE election_sessions SET status='open',opened_at=CURRENT_TIMESTAMP,closed_at=NULL WHERE id=?",(eid,))
-    conn.commit(); conn.close(); return redirect(url_for('admin_dashboard'))
+    conn.commit(); conn.close(); election_audit('SESSION_TOGGLED','admin',eid,None,'status changed'); return redirect(url_for('admin_dashboard'))
 
 @app.route('/admin/election/<int:eid>/phase/create',methods=['POST'])
 def admin_create_phase(eid):
     if not admin_required(): return redirect(url_for('admin_login'))
-    position=request.form.get('position','').strip(); names=[x.strip() for x in request.form.get('candidates','').splitlines() if x.strip()]
-    if not position or len(names)<2: flash('Position and at least two candidates are required.','danger'); return redirect(url_for('admin_dashboard'))
-    conn=get_db(); cur=conn.execute("INSERT INTO election_phases(session_id,position) VALUES(?,?)",(eid,position)); pid=cur.lastrowid
-    conn.executemany("INSERT INTO election_candidates(phase_id,name) VALUES(?,?)",[(pid,n) for n in names]); conn.commit(); conn.close()
+    position=' '.join(request.form.get('position','').strip().split())
+    raw=[ ' '.join(x.strip().split()) for x in request.form.get('candidates','').splitlines() if x.strip() ]
+    if not position or len(raw)<2:
+        flash('Position and at least two candidates are required.','danger')
+        return redirect(url_for('admin_dashboard'))
+
+    seen=set(); names=[]; duplicates=[]
+    for name in raw:
+        key=name.casefold()
+        if key in seen:
+            duplicates.append(name)
+        else:
+            seen.add(key); names.append(name)
+    if duplicates:
+        flash('Duplicate candidate name(s): ' + ', '.join(sorted(set(duplicates), key=str.casefold)) + '. Please remove duplicates and try again.','danger')
+        return redirect(url_for('admin_dashboard'))
+
+    conn=get_db()
+    try:
+        conn.execute("BEGIN")
+        cur=conn.execute("INSERT INTO election_phases(session_id,position) VALUES(?,?)",(eid,position))
+        pid=cur.lastrowid
+        conn.executemany("INSERT INTO election_candidates(phase_id,name) VALUES(?,?)",[(pid,n) for n in names])
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        flash(f'Unable to create phase: {exc}','danger')
+        return redirect(url_for('admin_dashboard'))
+    finally:
+        conn.close()
+    election_audit('PHASE_CREATED','admin',eid,pid,f'{position}; candidates={len(names)}')
+    flash(f'{position} phase created with {len(names)} candidates.','success')
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/admin/election/phase/<int:pid>/toggle',methods=['POST'])
@@ -853,7 +903,7 @@ def admin_delete_phase(pid):
         return redirect(url_for('admin_dashboard'))
 
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("BEGIN")
         # Delete anonymous ballots and voter participation records first,
         # followed by candidates and then the phase itself.
         conn.execute("DELETE FROM election_ballots WHERE phase_id=?", (pid,))
@@ -862,9 +912,16 @@ def admin_delete_phase(pid):
         conn.execute("DELETE FROM election_phases WHERE id=?", (pid,))
         conn.commit()
         flash(f"{phase['position']} phase and its voting data were deleted.", 'success')
-    except Exception:
+        election_audit('PHASE_DELETED','admin',phase['session_id'],pid,phase['position'])
+    except sqlite3.OperationalError as exc:
         conn.rollback()
-        raise
+        if 'locked' in str(exc).lower():
+            flash('The database is busy. Please wait a few seconds and try Delete Phase again.', 'warning')
+        else:
+            flash(f'Unable to delete phase: {exc}', 'danger')
+    except Exception as exc:
+        conn.rollback()
+        flash(f'Unable to delete phase: {exc}', 'danger')
     finally:
         conn.close()
 
