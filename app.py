@@ -8,6 +8,8 @@ import time
 from werkzeug.utils import secure_filename
 from flask import Flask, render_template, render_template_string, request, redirect, url_for, flash, session, jsonify, send_file, make_response
 from werkzeug.security import generate_password_hash, check_password_hash
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 from docx import Document
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -18,6 +20,30 @@ from push import save_subscription, send_push_to_all, VAPID_PUBLIC_KEY, push_con
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'change-me-in-aws')
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # 8 MB upload limit
+
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '').strip()
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '').strip()
+TWILIO_VERIFY_SERVICE_SID = os.environ.get('TWILIO_VERIFY_SERVICE_SID', '').strip()
+
+def twilio_verify_client():
+    if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_VERIFY_SERVICE_SID):
+        raise RuntimeError('Twilio Verify is not configured.')
+    return Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+def normalize_us_phone(phone):
+    digits = ''.join(ch for ch in (phone or '') if ch.isdigit())
+    if len(digits) == 11 and digits.startswith('1'):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return None
+    return '+1' + digits
+
+def voter_phone_variants(phone):
+    e164 = normalize_us_phone(phone)
+    if not e164:
+        return [], None
+    ten = e164[2:]
+    return [ten, e164, '1' + ten], e164
 
 # AWS-ready data configuration. Set DATA_DIR to an attached/persistent path
 # (for example an EFS mount) or set DB_PATH directly. Local development
@@ -727,11 +753,12 @@ def current_phase(conn,eid):
 def election_verified():
     return bool(session.get('election_voter_id') and int(time.time())-int(session.get('election_verified_at',0)) <= ELECTION_AUTH_TTL)
 
-def send_election_otp(phone, code):
-    # TEST MODE: code is written to the SFCD5 service log.
-    # Replace this function with Twilio before production.
-    print(f"[SFCD OTP] {phone}: {code}", flush=True)
-    return True
+def send_election_otp(phone):
+    client = twilio_verify_client()
+    return client.verify.v2.services(TWILIO_VERIFY_SERVICE_SID).verifications.create(
+        to=phone,
+        channel='sms'
+    )
 
 @app.route('/election')
 def election_home():
@@ -758,36 +785,96 @@ def election_status():
 
 @app.route('/election/login',methods=['GET','POST'])
 def election_login():
-    if request.method=='GET': return render_template('election_login.html')
-    phone=''.join(request.form.get('phone','').split())
-    conn=get_db(); e=current_election(conn); voter=conn.execute("SELECT id,phone_number FROM users WHERE phone_number=?",(phone,)).fetchone()
+    if request.method=='GET':
+        return render_template('election_login.html')
+
+    raw_phone=request.form.get('phone','').strip()
+    variants,e164=voter_phone_variants(raw_phone)
+    if not e164:
+        flash('Enter a valid 10-digit U.S. phone number.','danger')
+        return redirect(url_for('election_login'))
+
+    conn=get_db()
+    e=current_election(conn)
+    voter=None
+    for candidate_phone in variants:
+        voter=conn.execute("SELECT id,phone_number FROM users WHERE phone_number=?",(candidate_phone,)).fetchone()
+        if voter:
+            break
+
     if not e:
-        conn.close(); flash('The voting session is currently closed.','danger'); return redirect(url_for('election_login'))
+        conn.close()
+        flash('The voting session is currently closed.','danger')
+        return redirect(url_for('election_login'))
     if not voter:
-        conn.close(); flash('This phone number is not registered to vote.','danger'); return redirect(url_for('election_login'))
-    code=f"{secrets.randbelow(1000000):06d}"
-    conn.execute("UPDATE election_otp SET used=1 WHERE voter_id=? AND used=0",(voter['id'],))
-    conn.execute("INSERT INTO election_otp(voter_id,code_hash,expires_at) VALUES(?,?,?)",(voter['id'],generate_password_hash(code),int(time.time())+ELECTION_OTP_TTL))
-    conn.commit(); conn.close()
-    send_election_otp(phone,code)
-    session['pending_election_voter_id']=voter['id']; session['pending_election_phone']=phone
+        conn.close()
+        flash('This phone number is not registered to vote.','danger')
+        return redirect(url_for('election_login'))
+    conn.close()
+
+    # Prevent rapid repeated sends from the same browser session.
+    now=int(time.time())
+    last_send=int(session.get('election_otp_sent_at',0) or 0)
+    if now-last_send < 30:
+        flash('A verification code was just sent. Please wait before requesting another.','warning')
+        return redirect(url_for('election_verify'))
+
+    try:
+        verification=send_election_otp(e164)
+        if verification.status not in ('pending','approved'):
+            app.logger.warning("Twilio Verify unexpected send status: %s", verification.status)
+    except (TwilioRestException, RuntimeError) as exc:
+        app.logger.exception("Unable to send election verification SMS")
+        flash('We could not send the verification code. Please contact the election administrator.','danger')
+        return redirect(url_for('election_login'))
+
+    session['pending_election_voter_id']=voter['id']
+    session['pending_election_phone']=e164
+    session['election_otp_sent_at']=now
+    election_audit('OTP_SENT',f"voter:{voter['id']}",e['id'],None,'Twilio Verify SMS requested')
     return redirect(url_for('election_verify'))
 
 @app.route('/election/verify',methods=['GET','POST'])
 def election_verify():
     voter=session.get('pending_election_voter_id')
-    if not voter: return redirect(url_for('election_login'))
-    if request.method=='GET': return render_template('election_verify.html',phone=session.get('pending_election_phone'))
-    code=request.form.get('code','').strip(); conn=get_db()
-    otp=conn.execute("SELECT * FROM election_otp WHERE voter_id=? AND used=0 ORDER BY id DESC LIMIT 1",(voter,)).fetchone()
-    if not otp or otp['expires_at']<int(time.time()) or otp['attempts']>=5:
-        conn.close(); flash('Verification code expired. Request a new one.','danger'); return redirect(url_for('election_login'))
-    if not check_password_hash(otp['code_hash'],code):
-        conn.execute("UPDATE election_otp SET attempts=attempts+1 WHERE id=?",(otp['id'],)); conn.commit(); conn.close()
-        flash('Invalid verification code.','danger'); return redirect(url_for('election_verify'))
-    conn.execute("UPDATE election_otp SET used=1 WHERE id=?",(otp['id'],)); conn.commit(); conn.close()
-    session.pop('pending_election_voter_id',None); session.pop('pending_election_phone',None)
-    session['election_voter_id']=voter; session['election_verified_at']=int(time.time())
+    phone=session.get('pending_election_phone')
+    if not voter or not phone:
+        return redirect(url_for('election_login'))
+    if request.method=='GET':
+        return render_template('election_verify.html',phone=phone)
+
+    code=''.join(ch for ch in request.form.get('code','') if ch.isdigit())
+    if len(code) < 4 or len(code) > 10:
+        flash('Enter the verification code sent to your phone.','danger')
+        return redirect(url_for('election_verify'))
+
+    try:
+        check=twilio_verify_client().verify.v2.services(
+            TWILIO_VERIFY_SERVICE_SID
+        ).verification_checks.create(to=phone, code=code)
+    except (TwilioRestException, RuntimeError):
+        app.logger.exception("Unable to check election verification code")
+        flash('We could not verify the code right now. Please try again.','danger')
+        return redirect(url_for('election_verify'))
+
+    if check.status != 'approved':
+        election_audit('OTP_FAILED',f"voter:{voter}",None,None,'Twilio Verify rejected code')
+        flash('Invalid or expired verification code.','danger')
+        return redirect(url_for('election_verify'))
+
+    conn=get_db()
+    e=current_election(conn)
+    conn.close()
+    if not e:
+        flash('The voting session is currently closed.','danger')
+        return redirect(url_for('election_login'))
+
+    session.pop('pending_election_voter_id',None)
+    session.pop('pending_election_phone',None)
+    session.pop('election_otp_sent_at',None)
+    session['election_voter_id']=voter
+    session['election_verified_at']=int(time.time())
+    election_audit('OTP_APPROVED',f"voter:{voter}",e['id'],None,'Twilio Verify approved')
     return redirect(url_for('election_home'))
 
 @app.route('/election/vote',methods=['POST'])
