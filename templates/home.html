@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFCD | Church Home</title>
+<style>
+:root{--green:#174c3c;--green2:#23705a;--cream:#f7f4ec;--card:#fff;--ink:#1e2a26;--muted:#68736f;--line:#e4e8e5;--gold:#c89b3c}
+*{box-sizing:border-box} body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--cream);color:var(--ink)}
+a{text-decoration:none;color:inherit}.wrap{max-width:1040px;margin:auto;padding:0 16px 48px}
+.hero{background:linear-gradient(135deg,var(--green),var(--green2));color:#fff;padding:30px 18px 26px;margin:0 -16px 22px;text-align:center}
+.hero h1{margin:0 0 6px;font-size:28px}.hero p{margin:0;opacity:.92}.nav{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}.nav a{background:#ffffff18;border:1px solid #ffffff30;border-radius:12px;padding:12px 8px;font-weight:700;font-size:14px}
+.section{margin:24px 0}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.section h2{font-size:20px;margin:0}.more{color:var(--green2);font-weight:700;font-size:14px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 2px 8px #0000000a}.card-body{padding:16px}.card h3{margin:0 0 7px;font-size:18px}.card p{margin:6px 0;color:var(--muted);line-height:1.45}.thumb{width:100%;height:170px;object-fit:cover;background:#e8ece9}.meta{font-size:13px;color:var(--muted);font-weight:700}.cta{display:inline-block;margin-top:10px;background:var(--green);color:#fff;padding:10px 14px;border-radius:9px;font-weight:700}
+.feature{background:#fff;border:1px solid var(--line);border-left:5px solid var(--gold);border-radius:16px;padding:18px}.feature h2{margin:0 0 6px}.status{display:inline-block;padding:5px 9px;border-radius:999px;background:#e6f5ee;color:#176043;font-size:12px;font-weight:800;text-transform:uppercase}.status.closed{background:#eee;color:#666}
+.quick{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.quick a{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 8px;text-align:center;font-weight:700}.quick span{display:block;font-size:24px;margin-bottom:6px}
+.empty{background:#fff;border:1px dashed #cfd6d2;border-radius:14px;padding:20px;color:var(--muted)}.footer{text-align:center;color:var(--muted);font-size:13px;margin-top:34px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}.quick{grid-template-columns:repeat(2,1fr)}.nav{grid-template-columns:repeat(3,1fr)}.thumb{height:210px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <h1>Sharon Fellowship Church Dallas</h1>
+  <p>Connect • Worship • Grow • Serve</p>
+  <nav class="nav"><a href="/announcements">📢 News</a><a href="/events">📅 Events</a><a href="/gallery">📸 Gallery</a></nav>
+</header>
+
+{% if election %}
+<section class="feature">
+  <span class="status {{ 'closed' if election['status'] != 'open' else '' }}">Voting {{ election['status'] }}</span>
+  <h2>{{ election['title'] }}</h2>
+  <p>{% if election['status'] == 'open' %}The voting session is open. Registered voters can authenticate and participate.{% else %}This voting session is currently closed.{% endif %}</p>
+  <a class="cta" href="/election">Go to Voting</a>
+</section>
+{% endif %}
+
+<section class="section">
+ <div class="section-head"><h2>Quick Access</h2></div>
+ <div class="quick">
+  <a href="/events"><span>📅</span>Events</a>
+  <a href="/announcements"><span>📢</span>News</a>
+  <a href="/election"><span>🗳️</span>Voting</a>
+  <a href="/gallery"><span>📸</span>Gallery</a>
+  {% if rsvp_event %}<a href="/rsvp/{{ rsvp_event['id'] }}"><span>✅</span>RSVP</a>{% else %}<a href="/events"><span>🤝</span>Connect</a>{% endif %}
+ </div>
+</section>
+
+{% if rsvp_event %}
+<section class="section">
+ <div class="feature">
+  <span class="status">Upcoming RSVP</span>
+  <h2>{{ rsvp_event['title'] }}</h2>
+  <p>{{ rsvp_event['event_date'] }}{% if rsvp_event['event_time'] %} • {{ rsvp_event['event_time'] }}{% endif %}</p>
+  <a class="cta" href="/rsvp/{{ rsvp_event['id'] }}">RSVP Now</a>
+ </div>
+</section>
+{% endif %}
+
+<section class="section">
+ <div class="section-head"><h2>Latest Announcements</h2><a class="more" href="/announcements">View all →</a></div>
+ {% if announcements %}<div class="grid">
+ {% for a in announcements %}<article class="card">{% if a['image_path'] %}<img class="thumb" src="{{ a['image_path'] }}" alt="">{% endif %}<div class="card-body"><h3>{{ a['title'] }}</h3><p>{{ a['body'][:180] }}{% if a['body']|length > 180 %}…{% endif %}</p></div></article>{% endfor %}
+ </div>{% else %}<div class="empty">No announcements posted yet.</div>{% endif %}
+</section>
+
+<section class="section">
+ <div class="section-head"><h2>Upcoming Events</h2><a class="more" href="/events">View all →</a></div>
+ {% if events %}<div class="grid">
+ {% for e in events %}<article class="card">{% if e['image_path'] %}<img class="thumb" src="{{ e['image_path'] }}" alt="">{% endif %}<div class="card-body"><div class="meta">{{ e['event_date'] }}{% if e['event_time'] %} • {{ e['event_time'] }}{% endif %}</div><h3>{{ e['title'] }}</h3>{% if e['location'] %}<p>📍 {{ e['location'] }}</p>{% endif %}<p>{{ (e['description'] or '')[:150] }}</p></div></article>{% endfor %}
+ </div>{% else %}<div class="empty">No upcoming events posted yet.</div>{% endif %}
+</section>
+
+<section class="section">
+ <div class="section-head"><h2>Latest Photos</h2><a class="more" href="/gallery">View gallery →</a></div>
+ {% if photos %}<div class="grid">{% for p in photos %}<article class="card"><img class="thumb" src="{{ p['image_path'] }}" alt="{{ p['caption'] or 'SFCD photo' }}"><div class="card-body"><p>{{ p['caption'] or 'SFCD' }}</p></div></article>{% endfor %}</div>{% else %}<div class="empty">Gallery photos will appear here.</div>{% endif %}
+</section>
+
+<div class="footer">Sharon Fellowship Church Dallas • SFCD 5.2</div>
+</div>
+</body>
+</html>
