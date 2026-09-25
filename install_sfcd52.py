@@ -1,29 +1,73 @@
 from pathlib import Path
-import shutil, sys, time
+import shutil
+import re
+import sys
 
-root = Path.cwd()
-app = root / 'app.py'
-templates = root / 'templates'
-source_home = Path(__file__).resolve().parent / 'templates' / 'home.html'
+ROOT = Path(__file__).resolve().parent
+APP = ROOT / "app.py"
+TEMPLATE = ROOT / "templates" / "member_home.html"
+BACKUP = ROOT / "app.py.sfcd51.backup"
 
-if not app.exists() or not templates.exists():
-    sys.exit('ERROR: Run this from the SFCD5 repository root (where app.py and templates/ exist).')
+if not APP.exists():
+    raise SystemExit("app.py was not found.")
+if not TEMPLATE.exists():
+    raise SystemExit("templates/member_home.html is missing.")
 
-text = app.read_text(encoding='utf-8')
-old = """@app.route('/', methods=['GET'])\ndef index():\n    return redirect(url_for('announcements'))"""
-new = """@app.route('/', methods=['GET'])\ndef index():\n    # SFCD 5.2 member home. Read-only queries only; existing public/admin/voting routes remain unchanged.\n    ensure_dynamic_rsvp_tables()\n    conn = get_db()\n    announcements = conn.execute(\n        \"SELECT * FROM announcements ORDER BY created_at DESC LIMIT 3\"\n    ).fetchall()\n    events = conn.execute(\n        \"SELECT * FROM events WHERE event_date >= date('now') ORDER BY event_date ASC, event_time ASC LIMIT 3\"\n    ).fetchall()\n    photos = conn.execute(\n        \"SELECT * FROM gallery ORDER BY created_at DESC LIMIT 3\"\n    ).fetchall()\n    election = conn.execute(\n        \"SELECT * FROM election_sessions ORDER BY id DESC LIMIT 1\"\n    ).fetchone()\n    rsvp_event = conn.execute(\n        \"SELECT * FROM rsvp_events WHERE active=1 AND event_date >= date('now') ORDER BY event_date ASC, event_time ASC LIMIT 1\"\n    ).fetchone()\n    conn.close()\n    return render_template(\n        'home.html',\n        announcements=announcements,\n        events=events,\n        photos=photos,\n        election=election,\n        rsvp_event=rsvp_event\n    )"""
+text = APP.read_text(encoding="utf-8")
+
+old = """@app.route('/', methods=['GET'])
+def index():
+    return redirect(url_for('announcements'))
+"""
+
+new = """@app.route('/', methods=['GET'])
+def index():
+    conn = get_db()
+    latest_announcement = conn.execute(
+        "SELECT * FROM announcements ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    upcoming_events = conn.execute(
+        "SELECT * FROM events WHERE event_date >= date('now') ORDER BY event_date ASC, event_time ASC LIMIT 3"
+    ).fetchall()
+    gallery_photos = conn.execute(
+        "SELECT * FROM gallery ORDER BY created_at DESC LIMIT 3"
+    ).fetchall()
+
+    election_open = False
+    try:
+        row = conn.execute(
+            "SELECT id FROM election_sessions WHERE status='open' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        election_open = row is not None
+    except Exception:
+        election_open = False
+
+    conn.close()
+
+    return render_template(
+        'member_home.html',
+        latest_announcement=latest_announcement,
+        upcoming_events=upcoming_events,
+        gallery_photos=gallery_photos,
+        election_open=election_open,
+        election_route_available=False
+    )
+"""
 
 if new in text:
-    print('app.py already contains the SFCD 5.2 home route; no route change needed.')
-elif old not in text:
-    sys.exit("ERROR: Expected current index route was not found. app.py was NOT changed. This protects your working deployment.")
-else:
-    stamp = time.strftime('%Y%m%d-%H%M%S')
-    backup = root / f'app.py.pre-sfcd52-{stamp}.bak'
-    shutil.copy2(app, backup)
-    app.write_text(text.replace(old, new, 1), encoding='utf-8')
-    print(f'Updated app.py. Backup: {backup.name}')
+    print("SFCD 5.2 member home is already installed.")
+    sys.exit(0)
 
-shutil.copy2(source_home, templates / 'home.html')
-print('Installed templates/home.html')
-print('SFCD 5.2 Phase 1 installation complete.')
+if old not in text:
+    raise SystemExit(
+        "Safety stop: the expected SFCD 5.1 home route was not found. "
+        "No changes were made."
+    )
+
+if not BACKUP.exists():
+    shutil.copy2(APP, BACKUP)
+    print(f"Backup created: {BACKUP.name}")
+
+APP.write_text(text.replace(old, new, 1), encoding="utf-8")
+print("SFCD 5.2 member home installed successfully.")
+print("Run: python -m py_compile app.py")

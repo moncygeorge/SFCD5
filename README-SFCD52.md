@@ -1,32 +1,39 @@
-# SFCD 5.2 — Member Home (Phase 1)
+# SFCD 5.2 – Member Home
 
-This upgrade is intentionally additive. It does **not** replace the election, Twilio OTP, voter management, RSVP, announcements, events, gallery, or admin routes.
+This package is an additive upgrade for the existing SFCD5 application.
 
-## What changes
+## What it changes
+
+- Replaces only the `/` route behavior.
 - `/` becomes a member-facing church home page.
-- It displays up to 3 latest announcements, 3 upcoming events, 3 latest gallery photos, latest election status, and the next active RSVP event.
-- Existing links continue to use `/announcements`, `/events`, `/gallery`, `/election`, and `/rsvp/<id>`.
+- Reads from the existing:
+  - `announcements`
+  - `events`
+  - `gallery`
+  - `election_sessions`
+  tables.
+- Links members to the existing `/election`, `/announcements`, `/events`, and `/gallery` routes.
 
-## Safe installation
-1. Commit/push your current working SFCD5 first.
-2. Create a development branch: `git checkout -b sfcd5.2-member-home`
-3. Unzip this package.
-4. From your SFCD5 repository root run:
-   `python3 /path/to/SFCD5.2-member-home/install_sfcd52.py`
-5. Review: `git diff`
-6. Test locally or on a non-production copy before merging/deploying.
+## What it does NOT change
 
-The installer creates an `app.py.pre-sfcd52-<timestamp>.bak` backup and refuses to modify app.py if the expected current `/` route is not found.
+- Twilio Verify / OTP authentication
+- Phased election logic
+- Ballots or results
+- Voter management
+- Admin dashboard
+- RSVP routes
+- Existing announcement/event/gallery administration
+- Database schema
 
-## Production deployment after testing
-After committing and merging the tested branch to `main`, on Lightsail:
+## Installation on a TEST branch/server
 
-    cd /home/ubuntu/SFCD5
-    git pull origin main
-    sudo systemctl restart sfcd5
-    sudo systemctl status sfcd5 --no-pager
+From the repository root:
 
-Then test `/`, `/election`, `/admin_dashboard`, `/announcements`, `/events`, `/gallery`, and an RSVP link.
+```bash
+python install_sfcd52.py
+python -m py_compile app.py
+```
 
-## Next phase
-Prayer requests/prayer wall should be implemented separately because it requires explicit privacy/visibility controls.
+Do not run the installer on production until the branch has been reviewed/tested.
+
+The installer creates `app.py.sfcd51.backup` before modifying `app.py`.
