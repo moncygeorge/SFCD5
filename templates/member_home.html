@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SFCD | Home</title>
+  <style>
+    :root{
+      --bg:#f6f7f8;
+      --card:#ffffff;
+      --text:#1f2937;
+      --muted:#6b7280;
+      --brand:#0f5132;
+      --brand2:#1f7a52;
+      --accent:#efe8d8;
+      --border:#e5e7eb;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family:Arial,Helvetica,sans-serif;
+      background:var(--bg);
+      color:var(--text);
+    }
+    .wrap{max-width:1100px;margin:auto;padding:18px}
+    .hero{
+      background:linear-gradient(135deg,var(--brand),var(--brand2));
+      color:#fff;
+      border-radius:18px;
+      padding:28px 22px;
+      box-shadow:0 8px 26px #0002;
+    }
+    .hero h1{margin:0 0 8px;font-size:30px}
+    .hero p{margin:0;opacity:.92}
+    .quick{
+      display:grid;
+      grid-template-columns:repeat(4,1fr);
+      gap:12px;
+      margin:18px 0 24px;
+    }
+    .quick a{
+      background:var(--card);
+      color:var(--text);
+      text-decoration:none;
+      padding:16px 10px;
+      border-radius:14px;
+      text-align:center;
+      border:1px solid var(--border);
+      box-shadow:0 2px 8px #0000000f;
+      font-weight:700;
+    }
+    .quick span{display:block;font-size:24px;margin-bottom:6px}
+    h2{font-size:21px;margin:26px 0 12px}
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(3,1fr);
+      gap:14px;
+    }
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:16px;
+      overflow:hidden;
+      box-shadow:0 2px 10px #0000000d;
+    }
+    .card img{
+      width:100%;
+      height:180px;
+      object-fit:cover;
+      display:block;
+      background:#ececec;
+    }
+    .content{padding:16px}
+    .content h3{margin:0 0 8px;font-size:18px}
+    .content p{margin:6px 0;color:var(--muted);line-height:1.45}
+    .meta{font-size:13px;color:var(--muted);margin-top:6px}
+    .btn{
+      display:inline-block;
+      text-decoration:none;
+      background:var(--brand);
+      color:#fff;
+      padding:10px 14px;
+      border-radius:10px;
+      font-weight:700;
+      margin-top:10px;
+    }
+    .btn.secondary{
+      background:#fff;
+      color:var(--brand);
+      border:1px solid var(--brand);
+    }
+    .section-head{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+    }
+    .section-head a{
+      color:var(--brand);
+      text-decoration:none;
+      font-weight:700;
+    }
+    .status{
+      background:var(--accent);
+      border-radius:16px;
+      padding:18px;
+      margin:22px 0;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:18px;
+    }
+    .status strong{font-size:18px}
+    .empty{
+      background:#fff;
+      border:1px dashed #cbd5e1;
+      border-radius:14px;
+      padding:18px;
+      color:var(--muted);
+    }
+    footer{
+      text-align:center;
+      color:var(--muted);
+      padding:34px 0 18px;
+      font-size:13px;
+    }
+    @media(max-width:800px){
+      .quick{grid-template-columns:repeat(2,1fr)}
+      .grid{grid-template-columns:1fr}
+      .status{align-items:flex-start;flex-direction:column}
+      .hero h1{font-size:25px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Sharon Fellowship Church Dallas</h1>
+      <p>Stay connected with church announcements, events, voting, RSVP and photos.</p>
+    </section>
+
+    <section class="quick" aria-label="Quick links">
+      <a href="{{ url_for('announcements') }}"><span>📢</span>Announcements</a>
+      <a href="{{ url_for('events') }}"><span>📅</span>Events</a>
+      <a href="{{ url_for('gallery') }}"><span>📸</span>Gallery</a>
+      <a href="{{ url_for('election_home') if election_route_available else '/election' }}"><span>🗳️</span>Voting</a>
+    </section>
+
+    <section class="status">
+      <div>
+        <strong>Church Voting</strong>
+        {% if election_open %}
+          <div class="meta">A voting session is currently open.</div>
+        {% else %}
+          <div class="meta">No voting session is currently open.</div>
+        {% endif %}
+      </div>
+      <a class="btn" href="/election">{{ 'Open Voting' if election_open else 'Voting Page' }}</a>
+    </section>
+
+    <div class="section-head">
+      <h2>Latest Announcement</h2>
+      <a href="{{ url_for('announcements') }}">View all →</a>
+    </div>
+    {% if latest_announcement %}
+      <article class="card">
+        {% if latest_announcement['image_path'] %}
+          <img src="{{ latest_announcement['image_path'] }}" alt="">
+        {% endif %}
+        <div class="content">
+          <h3>{{ latest_announcement['title'] }}</h3>
+          <p>{{ latest_announcement['body'] }}</p>
+          <div class="meta">{{ latest_announcement['created_at'] }}</div>
+        </div>
+      </article>
+    {% else %}
+      <div class="empty">No announcements have been posted yet.</div>
+    {% endif %}
+
+    <div class="section-head">
+      <h2>Upcoming Events</h2>
+      <a href="{{ url_for('events') }}">View all →</a>
+    </div>
+    {% if upcoming_events %}
+      <section class="grid">
+      {% for event in upcoming_events %}
+        <article class="card">
+          {% if event['image_path'] %}
+            <img src="{{ event['image_path'] }}" alt="">
+          {% endif %}
+          <div class="content">
+            <h3>{{ event['title'] }}</h3>
+            <div class="meta">
+              {{ event['event_date'] }}
+              {% if event['event_time'] %} • {{ event['event_time'] }}{% endif %}
+            </div>
+            {% if event['location'] %}
+              <div class="meta">📍 {{ event['location'] }}</div>
+            {% endif %}
+            {% if event['description'] %}
+              <p>{{ event['description'] }}</p>
+            {% endif %}
+          </div>
+        </article>
+      {% endfor %}
+      </section>
+    {% else %}
+      <div class="empty">No upcoming events are currently posted.</div>
+    {% endif %}
+
+    <div class="section-head">
+      <h2>Recent Photos</h2>
+      <a href="{{ url_for('gallery') }}">View gallery →</a>
+    </div>
+    {% if gallery_photos %}
+      <section class="grid">
+      {% for photo in gallery_photos %}
+        <article class="card">
+          <img src="{{ photo['image_path'] }}" alt="{{ photo['caption'] or 'Church photo' }}">
+          <div class="content">
+            {% if photo['caption'] %}
+              <p>{{ photo['caption'] }}</p>
+            {% endif %}
+          </div>
+        </article>
+      {% endfor %}
+      </section>
+    {% else %}
+      <div class="empty">No gallery photos have been posted yet.</div>
+    {% endif %}
+
+    <footer>SFCD Member Home • SFCD 5.2</footer>
+  </div>
+</body>
+</html>
