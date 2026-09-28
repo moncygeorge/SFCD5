@@ -90,10 +90,22 @@ def director_required(func):
     return wrapped
 
 
+def teacher_required(func):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        if session.get("ss_user_id") is None or session.get("ss_role") != "teacher":
+            flash("Please log in as a Sunday School Teacher.", "warning")
+            return redirect(url_for("sunday_school.teacher_login"))
+        return func(*args, **kwargs)
+    return wrapped
+
+
 @sunday_school.route("/")
 def home():
     if session.get("ss_role") == "director":
         return redirect(url_for("sunday_school.dashboard"))
+    if session.get("ss_role") == "teacher":
+        return redirect(url_for("sunday_school.teacher_dashboard"))
     return redirect(url_for("sunday_school.login"))
 
 
@@ -528,3 +540,150 @@ def reset_password():
         return redirect(url_for("sunday_school.login"))
 
     return render_template("sunday_school/reset_password.html")
+
+
+@sunday_school.route("/teacher/login", methods=["GET", "POST"])
+def teacher_login():
+    if session.get("ss_user_id") and session.get("ss_role") == "teacher":
+        return redirect(url_for("sunday_school.teacher_dashboard"))
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+
+        conn = get_db()
+        teacher = conn.execute(
+            """SELECT id, name, username, password_hash
+               FROM sunday_school_users
+               WHERE username=? AND role='teacher' AND active=1""",
+            (username,),
+        ).fetchone()
+        conn.close()
+
+        if teacher and check_password_hash(teacher["password_hash"], password):
+            # Clear any Director/recovery state before creating the teacher session.
+            session.clear()
+            session["ss_user_id"] = teacher["id"]
+            session["ss_role"] = "teacher"
+            session["ss_name"] = teacher["name"]
+            return redirect(url_for("sunday_school.teacher_dashboard"))
+
+        flash("Invalid username or password.", "danger")
+
+    return render_template("sunday_school/teacher_login.html")
+
+
+@sunday_school.route("/teacher")
+@teacher_required
+def teacher_dashboard():
+    teacher_id = session.get("ss_user_id")
+
+    conn = get_db()
+    teacher = conn.execute(
+        """SELECT id, name, username, email, phone
+           FROM sunday_school_users
+           WHERE id=? AND role='teacher' AND active=1""",
+        (teacher_id,),
+    ).fetchone()
+
+    classes = conn.execute(
+        """SELECT c.id, c.name, c.grade, c.school_year
+           FROM sunday_school_classes c
+           INNER JOIN sunday_school_teacher_classes tc ON tc.class_id=c.id
+           WHERE tc.teacher_id=? AND c.active=1
+           ORDER BY c.name COLLATE NOCASE""",
+        (teacher_id,),
+    ).fetchall()
+    conn.close()
+
+    if not teacher:
+        session.clear()
+        flash("Your teacher account is not active. Please contact the Sunday School Director.", "warning")
+        return redirect(url_for("sunday_school.teacher_login"))
+
+    return render_template(
+        "sunday_school/teacher_dashboard.html",
+        teacher=teacher,
+        classes=classes,
+    )
+
+
+@sunday_school.route("/teacher/class/<int:class_id>")
+@teacher_required
+def teacher_class(class_id):
+    teacher_id = session.get("ss_user_id")
+    conn = get_db()
+    class_row = conn.execute(
+        """SELECT c.id, c.name, c.grade, c.school_year
+           FROM sunday_school_classes c
+           INNER JOIN sunday_school_teacher_classes tc ON tc.class_id=c.id
+           WHERE c.id=? AND tc.teacher_id=? AND c.active=1""",
+        (class_id, teacher_id),
+    ).fetchone()
+    conn.close()
+
+    if not class_row:
+        flash("You do not have access to that class.", "danger")
+        return redirect(url_for("sunday_school.teacher_dashboard"))
+
+    return render_template("sunday_school/teacher_class.html", class_row=class_row)
+
+
+@sunday_school.route("/teacher/change-password", methods=["GET", "POST"])
+@teacher_required
+def teacher_change_password():
+    teacher_id = session.get("ss_user_id")
+
+    if request.method == "POST":
+        current_password = request.form.get("current_password", "")
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if len(new_password) < 8:
+            flash("New password must contain at least 8 characters.", "danger")
+            return redirect(url_for("sunday_school.teacher_change_password"))
+
+        if new_password != confirm_password:
+            flash("New passwords do not match.", "danger")
+            return redirect(url_for("sunday_school.teacher_change_password"))
+
+        conn = get_db()
+        teacher = conn.execute(
+            """SELECT id, password_hash
+               FROM sunday_school_users
+               WHERE id=? AND role='teacher' AND active=1""",
+            (teacher_id,),
+        ).fetchone()
+
+        if not teacher:
+            conn.close()
+            session.clear()
+            flash("Teacher account not found. Please contact the Director.", "danger")
+            return redirect(url_for("sunday_school.teacher_login"))
+
+        if not check_password_hash(teacher["password_hash"], current_password):
+            conn.close()
+            flash("Current password is incorrect.", "danger")
+            return redirect(url_for("sunday_school.teacher_change_password"))
+
+        conn.execute(
+            """UPDATE sunday_school_users
+               SET password_hash=?
+               WHERE id=? AND role='teacher'""",
+            (generate_password_hash(new_password), teacher_id),
+        )
+        conn.commit()
+        conn.close()
+
+        flash("Password changed successfully.", "success")
+        return redirect(url_for("sunday_school.teacher_dashboard"))
+
+    return render_template("sunday_school/teacher_change_password.html")
+
+
+@sunday_school.route("/teacher/logout")
+def teacher_logout():
+    for key in ("ss_user_id", "ss_role", "ss_name"):
+        session.pop(key, None)
+    flash("You have been logged out.", "success")
+    return redirect(url_for("sunday_school.teacher_login"))

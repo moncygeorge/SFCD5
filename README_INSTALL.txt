@@ -1,41 +1,38 @@
-SFCD Sunday School 1.3 - SMS Forgot Password
+SFCD Sunday School 1.4 - Teacher Portal
 
-Upload/replace on the sunday-school branch:
+Built on Sunday School 1.3.
+
+NEW:
+- Teacher login
+- Teacher dashboard
+- Teacher sees only assigned active classes
+- Server-side authorization prevents opening an unassigned class by changing the URL
+- Teacher class page
+- Teacher change password
+- Teacher logout
+
+No new database is required. Existing sunday_school_users and
+sunday_school_teacher_classes are reused.
+
+UPLOAD TO sunday-school BRANCH:
 - sunday_school.py
-- templates/sunday_school/login.html
-- templates/sunday_school/forgot_password.html
-- templates/sunday_school/verify_reset_code.html
-- templates/sunday_school/reset_password.html
-- templates/sunday_school/dashboard.html
-- templates/sunday_school/change_password.html
+- templates/sunday_school/teacher_login.html
+- templates/sunday_school/teacher_dashboard.html
+- templates/sunday_school/teacher_class.html
+- templates/sunday_school/teacher_change_password.html
 
-This uses Twilio Verify already configured by SFCD5 through:
-TWILIO_ACCOUNT_SID
-TWILIO_AUTH_TOKEN
-TWILIO_VERIFY_SERVICE_SID
+The ZIP also contains the existing 1.3 templates for completeness.
 
-No Twilio secret is stored in GitHub.
-
-Flow:
-Login -> Forgot Password -> username -> SMS code -> verify code -> new password.
-
-Security:
-- Public response does not disclose whether the username exists.
-- Only active Director accounts are eligible in this version.
-- Phone is normalized to a US +1 number.
-- Twilio Verify controls code expiration/verification.
-- New password is stored as a Werkzeug hash.
-- Recovery session state is cleared after successful reset.
-
-Before deployment verify the Director profile has a mobile phone number.
-
-Deploy:
+DEPLOY:
 cd /home/ubuntu/SFCD5
 git pull origin sunday-school
-python3 -m py_compile sunday_school.py app.py
+python3 -m py_compile app.py sunday_school.py
 sudo systemctl restart sfcd5
 sudo systemctl status sfcd5 --no-pager
 
-Test:
-https://app.sharondallas.org/sunday-school/login
-Click Forgot Password.
+TEST:
+Director creates a teacher with a temporary password and assigns at least one class.
+Teacher login:
+https://app.sharondallas.org/sunday-school/teacher/login
+
+The teacher should see only classes assigned by the Director.
