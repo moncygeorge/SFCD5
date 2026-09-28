@@ -91,6 +91,8 @@ role_file      = 'roles.txt'
 with app.app_context():
     create_tables(DB_FILE)
     migrate_files_to_db(DB_FILE, role_file, choices_file, votes_file)
+# Sunday School module
+app.register_blueprint(sunday_school)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def get_db():
