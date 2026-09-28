@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{class_row.name}}</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#f4f6f8;color:#243447}header{background:#17324d;color:white;padding:18px}
+.head{max-width:900px;margin:auto;display:flex;justify-content:space-between;align-items:center}header a{color:white}.container{max-width:900px;margin:25px auto;padding:0 15px}
+.card{background:white;padding:22px;border-radius:12px;box-shadow:0 2px 10px #0001;margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px}
+.feature{background:#f7f8fa;padding:18px;border-radius:10px}.muted{color:#667}
+</style></head><body>
+<header><div class="head"><strong>SFCD Sunday School — Teacher Portal</strong><a href="{{url_for('sunday_school.teacher_dashboard')}}">My Classes</a></div></header>
+<div class="container"><div class="card"><h1>{{class_row.name}}</h1><p>Grade/Level: {{class_row.grade or '-'}}</p><p>School Year: {{class_row.school_year}}</p></div>
+<div class="grid">
+<div class="feature"><h3>Study Materials</h3><p class="muted">Upload and share lessons, PDFs and worksheets — coming next.</p></div>
+<div class="feature"><h3>Students</h3><p class="muted">View the class roster — coming next.</p></div>
+<div class="feature"><h3>Online Tests</h3><p class="muted">Create quizzes and tests — coming next.</p></div>
+</div></div></body></html>

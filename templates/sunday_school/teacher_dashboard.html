@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Teacher Dashboard</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#f4f6f8;color:#243447}header{background:#17324d;color:white;padding:18px}
+.head{max-width:1000px;margin:auto;display:flex;justify-content:space-between;align-items:center;gap:15px}header a{color:white}
+.container{max-width:1000px;margin:25px auto;padding:0 15px}.card{background:white;padding:22px;border-radius:12px;box-shadow:0 2px 10px #0001;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}.class-card{background:white;padding:20px;border-radius:12px;box-shadow:0 2px 10px #0001;border-top:4px solid #17324d}
+.btn{display:inline-block;background:#17324d;color:white;text-decoration:none;padding:10px 14px;border-radius:7px;margin-top:10px}.flash{background:#fff4cc;padding:11px;border-radius:7px;margin-bottom:15px}.small{color:#667;font-size:14px}
+</style></head><body>
+<header><div class="head"><div><strong>SFCD Sunday School</strong><br><small>Teacher Portal</small></div>
+<div><a href="{{url_for('sunday_school.teacher_change_password')}}">Change Password</a> &nbsp; | &nbsp; <a href="{{url_for('sunday_school.teacher_logout')}}">Logout</a></div></div></header>
+<div class="container">
+{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}
+<div class="card"><h1>Welcome, {{teacher.name}}</h1><div class="small">Username: {{teacher.username}}</div></div>
+<h2>My Classes</h2>
+{% if classes %}
+<div class="grid">{% for c in classes %}
+<div class="class-card"><h3>{{c.name}}</h3><p>Grade/Level: {{c.grade or '-'}}</p><p>School Year: {{c.school_year}}</p>
+<a class="btn" href="{{url_for('sunday_school.teacher_class',class_id=c.id)}}">Open Class</a></div>
+{% endfor %}</div>
+{% else %}
+<div class="card"><p>No classes are currently assigned to your account. Please contact the Sunday School Director.</p></div>
+{% endif %}
+</div></body></html>
