@@ -21,7 +21,7 @@ details{margin-top:8px}summary{cursor:pointer;font-weight:bold}
 </style>
 </head>
 <body>
-<header><div class="head"><div><strong>SFCD Sunday School</strong><br><small>Director Portal</small></div><a href="{{url_for('sunday_school.logout')}}">Logout</a></div></header>
+<header><div class="head"><div><strong>SFCD Sunday School</strong><br><small>Director Portal</small></div><div><a href="{{url_for('sunday_school.change_password')}}">Change Password</a> &nbsp; | &nbsp; <a href="{{url_for('sunday_school.logout')}}">Logout</a></div></div></header>
 <div class="container">
 {% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}
 <h1>Welcome, {{session.get('ss_name')}}</h1>
