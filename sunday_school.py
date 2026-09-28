@@ -72,6 +72,35 @@ def initialize_sunday_school():
             FOREIGN KEY (teacher_id) REFERENCES sunday_school_users(id) ON DELETE CASCADE,
             FOREIGN KEY (class_id) REFERENCES sunday_school_classes(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS sunday_school_quizzes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_id INTEGER NOT NULL,
+            teacher_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            instructions TEXT,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published')),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (class_id) REFERENCES sunday_school_classes(id) ON DELETE CASCADE,
+            FOREIGN KEY (teacher_id) REFERENCES sunday_school_users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS sunday_school_quiz_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quiz_id INTEGER NOT NULL,
+            question_order INTEGER NOT NULL,
+            question_type TEXT NOT NULL DEFAULT 'mcq' CHECK(question_type IN ('mcq','true_false')),
+            question_text TEXT NOT NULL,
+            option_a TEXT,
+            option_b TEXT,
+            option_c TEXT,
+            option_d TEXT,
+            correct_answer TEXT NOT NULL,
+            points INTEGER NOT NULL DEFAULT 1 CHECK(points > 0),
+            FOREIGN KEY (quiz_id) REFERENCES sunday_school_quizzes(id) ON DELETE CASCADE,
+            UNIQUE(quiz_id, question_order)
+        );
     """)
     conn.commit()
     conn.close()
@@ -261,6 +290,9 @@ def create_teacher():
     phone = request.form.get("phone", "").strip()
     password = request.form.get("password", "")
     class_ids = request.form.getlist("class_ids")
+    if len(class_ids) > 1:
+        flash("Each teacher can be assigned to only one class.", "danger")
+        return redirect(url_for("sunday_school.dashboard"))
 
     if not name or not username or not password:
         flash("Teacher name, username and temporary password are required.", "danger")
@@ -317,6 +349,9 @@ def toggle_teacher(teacher_id):
 @director_required
 def update_teacher_classes(teacher_id):
     class_ids = request.form.getlist("class_ids")
+    if len(class_ids) > 1:
+        flash("Each teacher can be assigned to only one class.", "danger")
+        return redirect(url_for("sunday_school.dashboard"))
     conn = get_db()
     teacher = conn.execute(
         "SELECT id FROM sunday_school_users WHERE id=? AND role='teacher'",
@@ -687,3 +722,215 @@ def teacher_logout():
         session.pop(key, None)
     flash("You have been logged out.", "success")
     return redirect(url_for("sunday_school.teacher_login"))
+
+
+def get_teacher_class(conn, teacher_id):
+    return conn.execute(
+        """SELECT c.id, c.name, c.grade, c.school_year
+           FROM sunday_school_classes c
+           INNER JOIN sunday_school_teacher_classes tc ON tc.class_id=c.id
+           WHERE tc.teacher_id=? AND c.active=1
+           ORDER BY c.id LIMIT 1""",
+        (teacher_id,),
+    ).fetchone()
+
+
+def get_teacher_quiz(conn, quiz_id, teacher_id):
+    return conn.execute(
+        """SELECT q.*, c.name AS class_name
+           FROM sunday_school_quizzes q
+           INNER JOIN sunday_school_classes c ON c.id=q.class_id
+           WHERE q.id=? AND q.teacher_id=?""",
+        (quiz_id, teacher_id),
+    ).fetchone()
+
+
+@sunday_school.route("/teacher/quizzes")
+@teacher_required
+def teacher_quizzes():
+    teacher_id = session.get("ss_user_id")
+    conn = get_db()
+    class_row = get_teacher_class(conn, teacher_id)
+    quizzes = []
+    if class_row:
+        quizzes = conn.execute(
+            """SELECT q.*,
+                      COUNT(qq.id) AS question_count,
+                      COALESCE(SUM(qq.points),0) AS total_points
+               FROM sunday_school_quizzes q
+               LEFT JOIN sunday_school_quiz_questions qq ON qq.quiz_id=q.id
+               WHERE q.teacher_id=? AND q.class_id=?
+               GROUP BY q.id
+               ORDER BY q.updated_at DESC, q.id DESC""",
+            (teacher_id, class_row["id"]),
+        ).fetchall()
+    conn.close()
+    return render_template("sunday_school/teacher_quizzes.html",
+                           class_row=class_row, quizzes=quizzes)
+
+
+@sunday_school.route("/teacher/quizzes/create", methods=["GET","POST"])
+@teacher_required
+def create_quiz():
+    teacher_id = session.get("ss_user_id")
+    conn = get_db()
+    class_row = get_teacher_class(conn, teacher_id)
+    if not class_row:
+        conn.close()
+        flash("A class must be assigned to your teacher account before creating a quiz.", "danger")
+        return redirect(url_for("sunday_school.teacher_dashboard"))
+
+    if request.method == "POST":
+        title = request.form.get("title","").strip()
+        instructions = request.form.get("instructions","").strip()
+        if not title:
+            conn.close()
+            flash("Quiz title is required.", "danger")
+            return redirect(url_for("sunday_school.create_quiz"))
+        cur = conn.execute(
+            """INSERT INTO sunday_school_quizzes
+               (class_id,teacher_id,title,instructions,status)
+               VALUES(?,?,?,?,'draft')""",
+            (class_row["id"], teacher_id, title, instructions),
+        )
+        conn.commit()
+        quiz_id=cur.lastrowid
+        conn.close()
+        flash("Quiz created as a draft. Add questions next.", "success")
+        return redirect(url_for("sunday_school.edit_quiz", quiz_id=quiz_id))
+
+    conn.close()
+    return render_template("sunday_school/create_quiz.html", class_row=class_row)
+
+
+@sunday_school.route("/teacher/quizzes/<int:quiz_id>/edit")
+@teacher_required
+def edit_quiz(quiz_id):
+    teacher_id=session.get("ss_user_id")
+    conn=get_db()
+    quiz=get_teacher_quiz(conn,quiz_id,teacher_id)
+    if not quiz:
+        conn.close()
+        flash("Quiz not found or access denied.", "danger")
+        return redirect(url_for("sunday_school.teacher_quizzes"))
+    questions=conn.execute(
+        """SELECT * FROM sunday_school_quiz_questions
+           WHERE quiz_id=? ORDER BY question_order,id""",(quiz_id,)
+    ).fetchall()
+    conn.close()
+    return render_template("sunday_school/edit_quiz.html",quiz=quiz,questions=questions)
+
+
+@sunday_school.route("/teacher/quizzes/<int:quiz_id>/questions/add", methods=["POST"])
+@teacher_required
+def add_quiz_question(quiz_id):
+    teacher_id=session.get("ss_user_id")
+    conn=get_db()
+    quiz=get_teacher_quiz(conn,quiz_id,teacher_id)
+    if not quiz:
+        conn.close()
+        flash("Quiz not found or access denied.", "danger")
+        return redirect(url_for("sunday_school.teacher_quizzes"))
+
+    qtype=request.form.get("question_type","mcq")
+    text=request.form.get("question_text","").strip()
+    points=request.form.get("points","1").strip()
+    try: points=int(points)
+    except ValueError: points=0
+    if not text or points < 1:
+        conn.close()
+        flash("Question text and positive points are required.", "danger")
+        return redirect(url_for("sunday_school.edit_quiz",quiz_id=quiz_id))
+
+    if qtype=="true_false":
+        a,b,c,d="True","False",None,None
+        correct=request.form.get("tf_correct","").strip()
+        if correct not in ("A","B"):
+            conn.close(); flash("Choose True or False as the correct answer.","danger")
+            return redirect(url_for("sunday_school.edit_quiz",quiz_id=quiz_id))
+    else:
+        qtype="mcq"
+        a=request.form.get("option_a","").strip()
+        b=request.form.get("option_b","").strip()
+        c=request.form.get("option_c","").strip()
+        d=request.form.get("option_d","").strip()
+        correct=request.form.get("mcq_correct","").strip()
+        if not all((a,b,c,d)) or correct not in ("A","B","C","D"):
+            conn.close(); flash("MCQ questions require all four choices and a correct answer.","danger")
+            return redirect(url_for("sunday_school.edit_quiz",quiz_id=quiz_id))
+
+    next_order=conn.execute(
+        "SELECT COALESCE(MAX(question_order),0)+1 FROM sunday_school_quiz_questions WHERE quiz_id=?",
+        (quiz_id,)
+    ).fetchone()[0]
+    conn.execute(
+        """INSERT INTO sunday_school_quiz_questions
+           (quiz_id,question_order,question_type,question_text,option_a,option_b,option_c,option_d,correct_answer,points)
+           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (quiz_id,next_order,qtype,text,a,b,c,d,correct,points)
+    )
+    conn.execute("UPDATE sunday_school_quizzes SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(quiz_id,))
+    conn.commit(); conn.close()
+    flash("Question added.","success")
+    return redirect(url_for("sunday_school.edit_quiz",quiz_id=quiz_id))
+
+
+@sunday_school.route("/teacher/quizzes/<int:quiz_id>/questions/<int:question_id>/delete", methods=["POST"])
+@teacher_required
+def delete_quiz_question(quiz_id,question_id):
+    teacher_id=session.get("ss_user_id")
+    conn=get_db()
+    quiz=get_teacher_quiz(conn,quiz_id,teacher_id)
+    if quiz:
+        conn.execute("DELETE FROM sunday_school_quiz_questions WHERE id=? AND quiz_id=?",(question_id,quiz_id))
+        rows=conn.execute("SELECT id FROM sunday_school_quiz_questions WHERE quiz_id=? ORDER BY question_order,id",(quiz_id,)).fetchall()
+        for i,row in enumerate(rows,1):
+            conn.execute("UPDATE sunday_school_quiz_questions SET question_order=? WHERE id=?",(i,row["id"]))
+        conn.execute("UPDATE sunday_school_quizzes SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(quiz_id,))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("sunday_school.edit_quiz",quiz_id=quiz_id))
+
+
+@sunday_school.route("/teacher/quizzes/<int:quiz_id>/preview")
+@teacher_required
+def preview_quiz(quiz_id):
+    teacher_id=session.get("ss_user_id")
+    conn=get_db(); quiz=get_teacher_quiz(conn,quiz_id,teacher_id)
+    if not quiz:
+        conn.close(); flash("Quiz not found or access denied.","danger")
+        return redirect(url_for("sunday_school.teacher_quizzes"))
+    questions=conn.execute("SELECT * FROM sunday_school_quiz_questions WHERE quiz_id=? ORDER BY question_order",(quiz_id,)).fetchall()
+    total=sum(q["points"] for q in questions)
+    conn.close()
+    return render_template("sunday_school/preview_quiz.html",quiz=quiz,questions=questions,total=total)
+
+
+@sunday_school.route("/teacher/quizzes/<int:quiz_id>/toggle-publish", methods=["POST"])
+@teacher_required
+def toggle_quiz_publish(quiz_id):
+    teacher_id=session.get("ss_user_id")
+    conn=get_db(); quiz=get_teacher_quiz(conn,quiz_id,teacher_id)
+    if not quiz:
+        conn.close(); flash("Quiz not found or access denied.","danger")
+        return redirect(url_for("sunday_school.teacher_quizzes"))
+    count=conn.execute("SELECT COUNT(*) FROM sunday_school_quiz_questions WHERE quiz_id=?",(quiz_id,)).fetchone()[0]
+    if quiz["status"]=="draft" and count==0:
+        conn.close(); flash("Add at least one question before publishing.","danger")
+        return redirect(url_for("sunday_school.edit_quiz",quiz_id=quiz_id))
+    status="draft" if quiz["status"]=="published" else "published"
+    conn.execute("UPDATE sunday_school_quizzes SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(status,quiz_id))
+    conn.commit(); conn.close()
+    flash("Quiz published." if status=="published" else "Quiz returned to draft.","success")
+    return redirect(url_for("sunday_school.teacher_quizzes"))
+
+
+@sunday_school.route("/teacher/quizzes/<int:quiz_id>/delete", methods=["POST"])
+@teacher_required
+def delete_quiz(quiz_id):
+    teacher_id=session.get("ss_user_id")
+    conn=get_db()
+    conn.execute("DELETE FROM sunday_school_quizzes WHERE id=? AND teacher_id=?",(quiz_id,teacher_id))
+    conn.commit(); conn.close()
+    flash("Quiz deleted.","success")
+    return redirect(url_for("sunday_school.teacher_quizzes"))
