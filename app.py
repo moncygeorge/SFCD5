@@ -16,6 +16,7 @@ from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from init_db import create_tables, migrate_files_to_db
 from push import save_subscription, send_push_to_all, VAPID_PUBLIC_KEY, push_configured
+from sunday_school import sunday_school
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'change-me-in-aws')
