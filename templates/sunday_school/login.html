@@ -1,1 +1,20 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Director Login</title></head><body><h1>SFCD Sunday School - Director Login</h1>{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<p>{{m}}</p>{% endfor %}{% endwith %}<form method="post"><p>Username <input name="username" required></p><p>Password <input type="password" name="password" required></p><button>Login</button></form></body></html>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sunday School Login</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#f4f6f8;color:#243447}.header{background:#17324d;color:white;text-align:center;padding:22px}
+.container{max-width:440px;margin:50px auto;padding:16px}.card{background:white;padding:30px;border-radius:14px;box-shadow:0 3px 15px #0002}
+input{width:100%;box-sizing:border-box;padding:13px;margin:7px 0 18px;border:1px solid #ccd3da;border-radius:8px;font-size:16px}
+button{width:100%;background:#17324d;color:white;border:0;padding:13px;border-radius:8px;font-size:16px;font-weight:bold}
+.flash{background:#fff4cc;padding:11px;margin-bottom:15px;border-radius:7px}.links{text-align:center;margin-top:18px}.links a{color:#17324d}
+</style></head><body>
+<div class="header"><h2>SFCD Sunday School</h2><div>Director Portal</div></div>
+<div class="container"><div class="card"><h1>Director Login</h1>
+{% with messages=get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="flash">{{ message }}</div>{% endfor %}{% endwith %}
+<form method="post">
+<label>Username</label><input name="username" autocomplete="username" required>
+<label>Password</label><input type="password" name="password" autocomplete="current-password" required>
+<button type="submit">Login</button>
+</form>
+<div class="links"><a href="{{ url_for('sunday_school.forgot_password') }}">Forgot Password?</a></div>
+</div></div></body></html>

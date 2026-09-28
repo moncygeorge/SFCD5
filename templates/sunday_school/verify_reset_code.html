@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verify Code</title><style>
+body{margin:0;font-family:Arial,sans-serif;background:#f4f6f8;color:#243447}.header{background:#17324d;color:white;padding:22px;text-align:center}
+.container{max-width:430px;margin:45px auto;padding:16px}.card{background:white;padding:28px;border-radius:14px;box-shadow:0 3px 15px #0002}
+input{width:100%;box-sizing:border-box;padding:14px;margin:7px 0 18px;border:1px solid #ccd3da;border-radius:8px;font-size:22px;letter-spacing:4px;text-align:center}
+button{width:100%;padding:12px;border:0;border-radius:8px;background:#17324d;color:white;font-size:16px;font-weight:bold}
+.flash{padding:11px;background:#fff4cc;border-radius:7px;margin-bottom:14px}.small{font-size:14px;color:#667}
+</style></head><body><div class="header"><h2>SFCD Sunday School</h2><div>Password Recovery</div></div>
+<div class="container"><div class="card"><h1>Enter Verification Code</h1>
+<p class="small">Enter the SMS verification code sent to the mobile number registered with your account.</p>
+{% with messages=get_flashed_messages(with_categories=true) %}{% for c,m in messages %}<div class="flash">{{m}}</div>{% endfor %}{% endwith %}
+<form method="post"><label>Verification Code</label><input name="code" inputmode="numeric" maxlength="10" autocomplete="one-time-code" required><button type="submit">Verify Code</button></form>
+</div></div></body></html>
