@@ -5,10 +5,30 @@ from functools import wraps
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session
 from werkzeug.security import generate_password_hash, check_password_hash
 
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
+
 sunday_school = Blueprint("sunday_school", __name__, url_prefix="/sunday-school")
 
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 DB_FILE = os.environ.get("DB_PATH", os.path.join(DATA_DIR, "sfcd.db"))
+
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_VERIFY_SERVICE_SID = os.environ.get("TWILIO_VERIFY_SERVICE_SID", "").strip()
+
+def normalize_us_phone(phone):
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return None
+    return "+1" + digits
+
+def twilio_verify_client():
+    if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_VERIFY_SERVICE_SID):
+        raise RuntimeError("Twilio Verify is not configured.")
+    return Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
 def get_db():
@@ -374,3 +394,137 @@ def change_password():
         return redirect(url_for("sunday_school.dashboard"))
 
     return render_template("sunday_school/change_password.html")
+
+
+@sunday_school.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+
+        # Always show the same outward message so account existence is not revealed.
+        generic_message = "If the account information is valid, a verification code has been sent."
+
+        conn = get_db()
+        user = conn.execute(
+            """SELECT id, username, phone
+               FROM sunday_school_users
+               WHERE username=? AND role='director' AND active=1""",
+            (username,),
+        ).fetchone()
+        conn.close()
+
+        if user:
+            phone = normalize_us_phone(user["phone"])
+            if phone:
+                try:
+                    client = twilio_verify_client()
+                    client.verify.v2.services(TWILIO_VERIFY_SERVICE_SID).verifications.create(
+                        to=phone,
+                        channel="sms",
+                    )
+                    session["ss_reset_user_id"] = user["id"]
+                    session["ss_reset_username"] = user["username"]
+                    flash(generic_message, "success")
+                    return redirect(url_for("sunday_school.verify_reset_code"))
+                except (TwilioRestException, RuntimeError):
+                    # Do not expose provider details on the public page.
+                    flash("Password recovery is temporarily unavailable. Please contact the site administrator.", "danger")
+                    return redirect(url_for("sunday_school.forgot_password"))
+
+        # Generic response even when username/phone doesn't match.
+        flash(generic_message, "success")
+        return render_template("sunday_school/forgot_password.html", submitted=True)
+
+    return render_template("sunday_school/forgot_password.html", submitted=False)
+
+
+@sunday_school.route("/forgot-password/verify", methods=["GET", "POST"])
+def verify_reset_code():
+    user_id = session.get("ss_reset_user_id")
+    username = session.get("ss_reset_username")
+
+    if not user_id or not username:
+        flash("Start password recovery again.", "warning")
+        return redirect(url_for("sunday_school.forgot_password"))
+
+    if request.method == "POST":
+        code = request.form.get("code", "").strip()
+
+        conn = get_db()
+        user = conn.execute(
+            """SELECT id, username, phone
+               FROM sunday_school_users
+               WHERE id=? AND username=? AND role='director' AND active=1""",
+            (user_id, username),
+        ).fetchone()
+        conn.close()
+
+        if not user:
+            session.pop("ss_reset_user_id", None)
+            session.pop("ss_reset_username", None)
+            flash("Password recovery session is no longer valid.", "danger")
+            return redirect(url_for("sunday_school.forgot_password"))
+
+        phone = normalize_us_phone(user["phone"])
+        if not phone:
+            flash("Password recovery is temporarily unavailable. Please contact the site administrator.", "danger")
+            return redirect(url_for("sunday_school.forgot_password"))
+
+        try:
+            client = twilio_verify_client()
+            check = client.verify.v2.services(TWILIO_VERIFY_SERVICE_SID).verification_checks.create(
+                to=phone,
+                code=code,
+            )
+        except (TwilioRestException, RuntimeError):
+            flash("The code could not be verified. Please try again.", "danger")
+            return redirect(url_for("sunday_school.verify_reset_code"))
+
+        if check.status == "approved":
+            session["ss_reset_verified"] = True
+            return redirect(url_for("sunday_school.reset_password"))
+
+        flash("Invalid or expired verification code.", "danger")
+
+    return render_template("sunday_school/verify_reset_code.html")
+
+
+@sunday_school.route("/forgot-password/reset", methods=["GET", "POST"])
+def reset_password():
+    user_id = session.get("ss_reset_user_id")
+    username = session.get("ss_reset_username")
+    verified = session.get("ss_reset_verified")
+
+    if not user_id or not username or not verified:
+        flash("Verify your recovery code first.", "warning")
+        return redirect(url_for("sunday_school.forgot_password"))
+
+    if request.method == "POST":
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if len(new_password) < 8:
+            flash("New password must contain at least 8 characters.", "danger")
+            return redirect(url_for("sunday_school.reset_password"))
+
+        if new_password != confirm_password:
+            flash("New passwords do not match.", "danger")
+            return redirect(url_for("sunday_school.reset_password"))
+
+        conn = get_db()
+        conn.execute(
+            """UPDATE sunday_school_users
+               SET password_hash=?
+               WHERE id=? AND username=? AND role='director' AND active=1""",
+            (generate_password_hash(new_password), user_id, username),
+        )
+        conn.commit()
+        conn.close()
+
+        for key in ("ss_reset_user_id", "ss_reset_username", "ss_reset_verified"):
+            session.pop(key, None)
+
+        flash("Password reset successfully. Please log in.", "success")
+        return redirect(url_for("sunday_school.login"))
+
+    return render_template("sunday_school/reset_password.html")

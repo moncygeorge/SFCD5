@@ -1,29 +1,41 @@
-SFCD Sunday School 1.2 - Director Change Password
+SFCD Sunday School 1.3 - SMS Forgot Password
 
-This package includes the Teacher Management changes from 1.1 PLUS Director Change Password.
+Upload/replace on the sunday-school branch:
+- sunday_school.py
+- templates/sunday_school/login.html
+- templates/sunday_school/forgot_password.html
+- templates/sunday_school/verify_reset_code.html
+- templates/sunday_school/reset_password.html
+- templates/sunday_school/dashboard.html
+- templates/sunday_school/change_password.html
 
-Replace/upload these files to the sunday-school branch:
-1. sunday_school.py
-2. templates/sunday_school/dashboard.html
-3. templates/sunday_school/change_password.html
+This uses Twilio Verify already configured by SFCD5 through:
+TWILIO_ACCOUNT_SID
+TWILIO_AUTH_TOKEN
+TWILIO_VERIFY_SERVICE_SID
 
-Do NOT replace app.py.
-Do NOT replace login.html or setup.html.
+No Twilio secret is stored in GitHub.
 
-Change Password behavior:
-- Director must already be logged in.
-- Requires current password.
-- New password must be at least 8 characters.
-- New password and confirmation must match.
-- Stores only a Werkzeug password hash.
-- Does not change classes, teachers, or other Sunday School data.
+Flow:
+Login -> Forgot Password -> username -> SMS code -> verify code -> new password.
 
-IMPORTANT FOR THE CURRENT DIRECTOR:
-If the current stored password hash does not match the password the Director knows, the new Change Password page cannot repair that by itself because it correctly requires the current password. Perform a one-time administrator reset of that Director password first, then future changes can be made through the website.
+Security:
+- Public response does not disclose whether the username exists.
+- Only active Director accounts are eligible in this version.
+- Phone is normalized to a US +1 number.
+- Twilio Verify controls code expiration/verification.
+- New password is stored as a Werkzeug hash.
+- Recovery session state is cleared after successful reset.
 
-Deployment:
+Before deployment verify the Director profile has a mobile phone number.
+
+Deploy:
 cd /home/ubuntu/SFCD5
 git pull origin sunday-school
 python3 -m py_compile sunday_school.py app.py
 sudo systemctl restart sfcd5
 sudo systemctl status sfcd5 --no-pager
+
+Test:
+https://app.sharondallas.org/sunday-school/login
+Click Forgot Password.
