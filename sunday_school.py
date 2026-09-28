@@ -326,3 +326,51 @@ def reset_teacher_password(teacher_id):
     conn.close()
     flash("Teacher password reset.", "success")
     return redirect(url_for("sunday_school.dashboard"))
+
+
+@sunday_school.route("/director/change-password", methods=["GET", "POST"])
+@director_required
+def change_password():
+    if request.method == "POST":
+        current_password = request.form.get("current_password", "")
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if len(new_password) < 8:
+            flash("New password must contain at least 8 characters.", "danger")
+            return redirect(url_for("sunday_school.change_password"))
+
+        if new_password != confirm_password:
+            flash("New passwords do not match.", "danger")
+            return redirect(url_for("sunday_school.change_password"))
+
+        conn = get_db()
+        director = conn.execute(
+            """SELECT id, password_hash
+               FROM sunday_school_users
+               WHERE id=? AND role='director' AND active=1""",
+            (session.get("ss_user_id"),),
+        ).fetchone()
+
+        if not director:
+            conn.close()
+            session.clear()
+            flash("Director account was not found. Please log in again.", "danger")
+            return redirect(url_for("sunday_school.login"))
+
+        if not check_password_hash(director["password_hash"], current_password):
+            conn.close()
+            flash("Current password is incorrect.", "danger")
+            return redirect(url_for("sunday_school.change_password"))
+
+        conn.execute(
+            "UPDATE sunday_school_users SET password_hash=? WHERE id=? AND role='director'",
+            (generate_password_hash(new_password), director["id"]),
+        )
+        conn.commit()
+        conn.close()
+
+        flash("Password changed successfully.", "success")
+        return redirect(url_for("sunday_school.dashboard"))
+
+    return render_template("sunday_school/change_password.html")

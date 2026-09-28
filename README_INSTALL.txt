@@ -1,33 +1,29 @@
-SFCD Sunday School 1.1 - Teacher Management
+SFCD Sunday School 1.2 - Director Change Password
 
-REPLACES:
+This package includes the Teacher Management changes from 1.1 PLUS Director Change Password.
+
+Replace/upload these files to the sunday-school branch:
 1. sunday_school.py
 2. templates/sunday_school/dashboard.html
+3. templates/sunday_school/change_password.html
 
-DO NOT replace app.py.
-DO NOT replace setup.html or login.html.
+Do NOT replace app.py.
+Do NOT replace login.html or setup.html.
 
-New features:
-- Director creates teacher accounts
-- Name, username, email, phone, temporary password
-- Assign teacher to one or more active classes
-- Change teacher/class assignments
-- Activate/deactivate teacher
-- Reset teacher password
-- Teacher count on Director dashboard
+Change Password behavior:
+- Director must already be logged in.
+- Requires current password.
+- New password must be at least 8 characters.
+- New password and confirmation must match.
+- Stores only a Werkzeug password hash.
+- Does not change classes, teachers, or other Sunday School data.
 
-The database migration is automatic: sunday_school_teacher_classes is created with CREATE TABLE IF NOT EXISTS.
+IMPORTANT FOR THE CURRENT DIRECTOR:
+If the current stored password hash does not match the password the Director knows, the new Change Password page cannot repair that by itself because it correctly requires the current password. Perform a one-time administrator reset of that Director password first, then future changes can be made through the website.
 
-After copying files to C:\Users\moncy\SFCD5:
-  git checkout sunday-school
-  git add sunday_school.py templates/sunday_school/dashboard.html
-  git commit -m "Add Sunday School teacher management"
-  git pull --rebase origin sunday-school
-  git push origin sunday-school
-
-On Lightsail:
-  cd /home/ubuntu/SFCD5
-  git pull origin sunday-school
-  python3 -m py_compile sunday_school.py app.py
-  sudo systemctl restart sfcd5
-  sudo systemctl status sfcd5 --no-pager
+Deployment:
+cd /home/ubuntu/SFCD5
+git pull origin sunday-school
+python3 -m py_compile sunday_school.py app.py
+sudo systemctl restart sfcd5
+sudo systemctl status sfcd5 --no-pager
