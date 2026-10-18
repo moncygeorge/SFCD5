@@ -16,6 +16,7 @@ from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from init_db import create_tables, migrate_files_to_db
 from push import save_subscription, send_push_to_all, VAPID_PUBLIC_KEY, push_configured
+from sunday_school import sunday_school
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'change-me-in-aws')
@@ -90,6 +91,9 @@ role_file      = 'roles.txt'
 with app.app_context():
     create_tables(DB_FILE)
     migrate_files_to_db(DB_FILE, role_file, choices_file, votes_file)
+
+# Sunday School module
+app.register_blueprint(sunday_school)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def get_db():
