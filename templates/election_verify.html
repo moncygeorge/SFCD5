@@ -1,1 +1,38 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verify</title></head><body style="font-family:Arial;background:#f4f6f8"><main style="max-width:430px;margin:50px auto;background:white;padding:28px;border-radius:14px"><h1>Verify Phone</h1>{% for cat,msg in get_flashed_messages(with_categories=true) %}<p>{{ msg }}</p>{% endfor %}<p>Enter the 6-digit code sent to {{ phone }}.</p><form method="post"><input name="code" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" required style="width:100%;padding:12px;box-sizing:border-box"><button style="width:100%;padding:13px;margin-top:12px">Verify</button></form></main></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Verify Phone</title>
+  <style>
+    body { font-family:Arial,sans-serif; background:#f4f6f8; margin:0; padding:20px; }
+    main { max-width:430px; margin:30px auto; background:white; padding:28px; border-radius:14px; }
+    input { width:100%; padding:12px; box-sizing:border-box; font-size:18px; }
+    button { width:100%; padding:13px; margin-top:12px; cursor:pointer; border-radius:6px; }
+    .primary { background:#176b48; color:white; border:0; }
+    .secondary { background:white; color:#176b48; border:1px solid #176b48; }
+    .message { padding:10px; background:#f3f3f3; border-radius:6px; }
+    .help { color:#555; font-size:14px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Verify Phone</h1>
+  {% for cat,msg in get_flashed_messages(with_categories=true) %}
+    <p class="message" role="alert">{{ msg }}</p>
+  {% endfor %}
+  <p>Enter the 6-digit code sent to {{ phone }}.</p>
+  <form method="post" action="{{ url_for('election_verify') }}">
+    <input name="code" maxlength="6" pattern="[0-9]{6}" inputmode="numeric"
+           autocomplete="one-time-code" aria-label="Verification code" required autofocus>
+    <button class="primary" type="submit">Verify Code</button>
+  </form>
+  <p class="help">Incorrect code? You can try again, or request another SMS.</p>
+  <form method="post" action="{{ url_for('election_resend_otp') }}">
+    <button class="secondary" type="submit">Resend OTP</button>
+  </form>
+  <p class="help">Please wait at least 30 seconds between requests. Twilio may resend the same code while it is still valid.</p>
+  <p><a href="{{ url_for('election_login') }}">Use a different phone number</a></p>
+</main>
+</body>
+</html>
