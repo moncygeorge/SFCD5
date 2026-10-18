@@ -91,6 +91,7 @@ role_file      = 'roles.txt'
 with app.app_context():
     create_tables(DB_FILE)
     migrate_files_to_db(DB_FILE, role_file, choices_file, votes_file)
+
 # Sunday School module
 app.register_blueprint(sunday_school)
 
@@ -836,6 +837,45 @@ def election_login():
     session['election_otp_sent_at']=now
     election_audit('OTP_SENT',f"voter:{voter['id']}",e['id'],None,'Twilio Verify SMS requested')
     return redirect(url_for('election_verify'))
+
+@app.route('/election/resend-otp', methods=['POST'])
+def election_resend_otp():
+    voter = session.get('pending_election_voter_id')
+    phone = session.get('pending_election_phone')
+    if not voter or not phone:
+        flash('Please enter your phone number to request a code.', 'warning')
+        return redirect(url_for('election_login'))
+
+    conn = get_db()
+    election = current_election(conn)
+    conn.close()
+    if not election:
+        flash('The voting session is currently closed.', 'danger')
+        return redirect(url_for('election_login'))
+
+    now = int(time.time())
+    last_send = int(session.get('election_otp_sent_at', 0) or 0)
+    if now - last_send < 30:
+        flash('Please wait 30 seconds after the previous code before resending.', 'warning')
+        return redirect(url_for('election_verify'))
+
+    try:
+        verification = send_election_otp(phone)
+        if verification.status not in ('pending', 'approved'):
+            app.logger.warning('Twilio Verify unexpected resend status: %s', verification.status)
+            flash('We could not resend the code right now. Please try again.', 'danger')
+            return redirect(url_for('election_verify'))
+    except (TwilioRestException, RuntimeError):
+        app.logger.exception('Unable to resend election verification SMS')
+        flash('We could not resend the code right now. Please try again.', 'danger')
+        return redirect(url_for('election_verify'))
+
+    session['election_otp_sent_at'] = now
+    election_audit('OTP_RESENT', f'voter:{voter}', election['id'], None,
+                   'Twilio Verify SMS resent')
+    flash('Verification code sent. Check your phone.', 'success')
+    return redirect(url_for('election_verify'))
+
 
 @app.route('/election/verify',methods=['GET','POST'])
 def election_verify():
