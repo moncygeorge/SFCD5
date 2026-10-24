@@ -772,15 +772,17 @@ def election_home():
     if not election_verified():
         conn.close(); return redirect(url_for('election_login'))
     p=current_phase(conn,e['id'])
+    mr=ministerial_round(conn,e['id'])
+    ministerial_open=bool(mr and mr['status']=='open')
     if not p:
-        conn.close(); return render_template('election_wait.html',election=e,message='You are verified. Please wait for the next voting phase.')
+        conn.close(); return render_template('election_wait.html',election=e,message='You are verified. Please wait for the next voting phase.',ministerial_open=ministerial_open)
     voter=session['election_voter_id']
     voted=conn.execute("SELECT 1 FROM election_voter_status WHERE phase_id=? AND voter_id=?",(p['id'],voter)).fetchone()
     candidates=conn.execute("SELECT id,name FROM election_candidates WHERE phase_id=? ORDER BY id",(p['id'],)).fetchall()
     conn.close()
     if voted:
-        return render_template('election_wait.html',election=e,phase=p,message=f"Your vote for {p['position']} has been recorded. Please wait for the next voting phase.")
-    return render_template('election_ballot.html',election=e,phase=p,candidates=candidates)
+        return render_template('election_wait.html',election=e,phase=p,message=f"Your vote for {p['position']} has been recorded. Please wait for the next voting phase.",ministerial_open=ministerial_open)
+    return render_template('election_ballot.html',election=e,phase=p,candidates=candidates,ministerial_open=ministerial_open)
 
 @app.route('/election/status')
 def election_status():
@@ -938,6 +940,132 @@ def election_vote():
         conn.rollback(); flash('You have already voted in this phase.','warning')
     finally: conn.close()
     return redirect(url_for('election_home'))
+
+
+# Ministerial nominations are independent of the candidate voting phases.
+MINISTERIAL_POSITIONS = [('Youth Director', ''), ('Assistant Youth Director', ''), ('Sisters Coordinator', ''), ('Sunday School Head master', ''), ('Mission Director', ''), ('Event Coordinator', ''), ('Sound Room Coordinator', 'Need Experience in Sound operation'), ('Media Coordinator', 'Computer display & Live Stream) Need to Know Malayalam & English'), ('Malayalam Choir Director', 'Leading worship & singing'), ('Malayalam Choir Assistant', ''), ('Malayalam Music Coordinator', 'Coordinating instruments & Music'), ('English Worship Lead', 'Leading worship and singing'), ('English Worship Assistant', ''), ('English Music Coordinator', 'Coordinating instruments & Music'), ('Children’s Church Coordinator', ''), ('Auditor', ''), ('Web Master -', 'To maintain our website')]
+
+def ensure_ministerial_tables():
+    conn = get_db()
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS ministerial_rounds (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'closed', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS ministerial_submissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, round_id INTEGER NOT NULL,
+        voter_id INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(round_id,voter_id));
+    CREATE TABLE IF NOT EXISTS ministerial_nominations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, submission_id INTEGER NOT NULL,
+        position_index INTEGER NOT NULL, first_name TEXT NOT NULL, last_name TEXT NOT NULL,
+        UNIQUE(submission_id,position_index));
+    """)
+    conn.commit(); conn.close()
+
+ensure_ministerial_tables()
+
+def ministerial_round(conn, session_id):
+    return conn.execute('SELECT * FROM ministerial_rounds WHERE session_id=?', (session_id,)).fetchone()
+
+@app.route('/admin/election/<int:eid>/ministerial/toggle', methods=['POST'])
+def ministerial_toggle(eid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    conn=get_db()
+    election=conn.execute('SELECT * FROM election_sessions WHERE id=?',(eid,)).fetchone()
+    if not election:
+        conn.close(); return 'Election not found',404
+    round_=ministerial_round(conn,eid)
+    if not round_:
+        conn.execute('INSERT INTO ministerial_rounds(session_id,status) VALUES(?,?)',(eid,'open'))
+    else:
+        conn.execute('UPDATE ministerial_rounds SET status=? WHERE id=?',('closed' if round_['status']=='open' else 'open',round_['id']))
+    conn.commit(); conn.close()
+    election_audit('MINISTERIAL_TOGGLE','admin',eid,None,'nomination status changed')
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/election/ministerial', methods=['GET','POST'])
+def ministerial_nominate():
+    if not election_verified(): return redirect(url_for('election_login'))
+    conn=get_db(); election=current_election(conn)
+    round_=ministerial_round(conn,election['id']) if election else None
+    if not round_ or round_['status']!='open':
+        conn.close(); flash('Ministerial nominations are closed.','warning'); return redirect(url_for('election_home'))
+    voter=session['election_voter_id']
+    already=conn.execute('SELECT id FROM ministerial_submissions WHERE round_id=? AND voter_id=?',(round_['id'],voter)).fetchone()
+    if request.method=='POST' and not already:
+        nominations=[]
+        for i, (position, note) in enumerate(MINISTERIAL_POSITIONS):
+            first=' '.join(request.form.get(f'first_{i}','').split())
+            last=' '.join(request.form.get(f'last_{i}','').split())
+            if bool(first)!=bool(last):
+                conn.close(); flash(f'Enter both first and last name for {position}.','danger'); return redirect(url_for('ministerial_nominate'))
+            if len(first)>80 or len(last)>80 or any(ord(c)<32 for c in first+last):
+                conn.close(); flash('Please use valid names up to 80 characters.','danger'); return redirect(url_for('ministerial_nominate'))
+            if first: nominations.append((i,first,last))
+        if not nominations:
+            conn.close(); flash('Enter at least one nomination.','danger'); return redirect(url_for('ministerial_nominate'))
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            active=conn.execute("SELECT 1 FROM ministerial_rounds r JOIN election_sessions e ON e.id=r.session_id WHERE r.id=? AND r.status='open' AND e.status='open'",(round_['id'],)).fetchone()
+            if not active: raise ValueError('Nominations are closed.')
+            cur=conn.execute('INSERT INTO ministerial_submissions(round_id,voter_id) VALUES(?,?)',(round_['id'],voter))
+            conn.executemany('INSERT INTO ministerial_nominations(submission_id,position_index,first_name,last_name) VALUES(?,?,?,?)',[(cur.lastrowid,*item) for item in nominations])
+            conn.commit()
+            election_audit('MINISTERIAL_SUBMITTED',f'voter:{voter}',election['id'],None,f'{len(nominations)} positions nominated')
+            already=True
+        except (sqlite3.IntegrityError,ValueError):
+            conn.rollback(); flash('Submission already recorded or nominations closed.','warning')
+        finally: conn.close()
+        return redirect(url_for('ministerial_nominate'))
+    conn.close()
+    return render_template('ministerial_nomination.html', election=election, positions=MINISTERIAL_POSITIONS, already=already)
+
+@app.route('/admin/election/<int:eid>/ministerial/results')
+def ministerial_results(eid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    conn=get_db(); round_=ministerial_round(conn,eid)
+    if not round_:
+        conn.close(); return 'Nomination round not found',404
+    rows=conn.execute("""SELECT position_index,first_name,last_name,COUNT(*) AS tally
+      FROM ministerial_nominations n JOIN ministerial_submissions s ON s.id=n.submission_id
+      WHERE s.round_id=? GROUP BY position_index,lower(first_name),lower(last_name)
+      ORDER BY position_index,tally DESC,lower(last_name),lower(first_name)""",(round_['id'],)).fetchall()
+    count=conn.execute('SELECT COUNT(*) FROM ministerial_submissions WHERE round_id=?',(round_['id'],)).fetchone()[0]
+    conn.close()
+    grouped={i:[] for i in range(len(MINISTERIAL_POSITIONS))}
+    for r in rows: grouped[r['position_index']].append(r)
+    return render_template('ministerial_results.html',positions=MINISTERIAL_POSITIONS,grouped=grouped,count=count,round=round_)
+
+@app.route('/admin/election/<int:eid>/ministerial/results/pdf')
+def ministerial_results_pdf(eid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    conn=get_db(); round_=ministerial_round(conn,eid)
+    if not round_:
+        conn.close(); return 'Nomination round not found',404
+    rows=conn.execute("""SELECT position_index, first_name, last_name, COUNT(*) AS tally
+      FROM ministerial_nominations n JOIN ministerial_submissions s ON s.id=n.submission_id
+      WHERE s.round_id=? GROUP BY position_index, lower(trim(first_name)), lower(trim(last_name))
+      ORDER BY position_index, tally DESC, lower(last_name), lower(first_name)""", (round_['id'],)).fetchall()
+    conn.close()
+    grouped={i:[] for i in range(len(MINISTERIAL_POSITIONS))}
+    for r in rows: grouped[r['position_index']].append(r)
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+    from reportlab.lib.styles import getSampleStyleSheet
+    output=io.BytesIO(); doc=SimpleDocTemplate(output,pagesize=letter,topMargin=42,bottomMargin=42)
+    styles=getSampleStyleSheet(); story=[Paragraph('Ministerial Positions - Nomination Tally',styles['Title']),Spacer(1,14)]
+    for idx,(position,note) in enumerate(MINISTERIAL_POSITIONS):
+        data=[['Rank','Nominee','Nominations']]
+        previous=None; rank=0
+        for i,r in enumerate(grouped[idx],1):
+            if r['tally'] != previous: rank=i
+            previous=r['tally']
+            data.append([str(rank),f"{r['first_name']} {r['last_name']}",str(r['tally'])])
+        if len(data)==1:data.append(['-','No nominations','0'])
+        t=Table(data,colWidths=[55,350,85],repeatRows=1,hAlign='LEFT')
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#e9eef5')),('GRID',(0,0),(-1,-1),.3,colors.lightgrey),('VALIGN',(0,0),(-1,-1),'TOP'),('BOTTOMPADDING',(0,0),(-1,-1),7),('TOPPADDING',(0,0),(-1,-1),7)]))
+        story.extend([Paragraph(f'{idx+1}. {position}',styles['Heading2']),t,Spacer(1,12)])
+    doc.build(story);output.seek(0)
+    return send_file(output,mimetype='application/pdf',as_attachment=True,download_name=f'ministerial_nomination_tally_{eid}.pdf')
 
 @app.route('/admin/election/create',methods=['POST'])
 def admin_create_election():
@@ -1178,6 +1306,7 @@ def admin_dashboard():
     voting_events = conn.execute("SELECT ve.*, COUNT(v.id) AS vote_count FROM voting_events ve LEFT JOIN voting_event_votes v ON v.event_id=ve.id GROUP BY ve.id ORDER BY ve.created_at DESC").fetchall()
     election_sessions = conn.execute("SELECT * FROM election_sessions ORDER BY id DESC").fetchall()
     election_phases = conn.execute("SELECT p.*,COUNT(v.id) vote_count FROM election_phases p LEFT JOIN election_voter_status v ON v.phase_id=p.id GROUP BY p.id ORDER BY p.id").fetchall()
+    ministerial_rounds = {r['session_id']:r for r in conn.execute('SELECT * FROM ministerial_rounds').fetchall()}
     registered_voter_count = conn.execute("SELECT COUNT(*) cnt FROM users").fetchone()['cnt']
     conn.close()
 
@@ -1189,6 +1318,7 @@ def admin_dashboard():
         voting_events=voting_events,
         election_sessions=election_sessions,
         election_phases=election_phases,
+        ministerial_rounds=ministerial_rounds,
         registered_voter_count=registered_voter_count,
         created=request.args.get('created', type=int),
         vote_created=request.args.get('vote_created', type=int)
