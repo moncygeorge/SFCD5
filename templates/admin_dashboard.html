@@ -19,7 +19,12 @@
 <button class="{{ 'danger' if e.status == 'open' else '' }}">{{ 'Close Entire Session' if e.status == 'open' else 'Open Voting Session' }}</button>
 </form>
 <hr>
-<h3>Add Voting Phase</h3>
+<h3>Ministerial Positions</h3>
+{% set mr=ministerial_rounds.get(e.id) %}
+<p>Status: <strong>{{ mr.status|upper if mr else 'NOT STARTED' }}</strong></p>
+<form method="post" action="/admin/election/{{ e.id }}/ministerial/toggle"><button>{{ 'Close Ministerial Nominations' if mr and mr.status=='open' else 'Open Ministerial Nominations' }}</button></form>
+{% if mr %}<p><a class="btn secondary" href="/admin/election/{{ e.id }}/ministerial/results">Ministerial Nomination Tally</a></p>{% endif %}
+<hr><h3>Add Voting Phase</h3>
 <form method="post" action="/admin/election/{{ e.id }}/phase/create">
 <input name="position" placeholder="Position (example: Secretary)" required>
 <textarea name="candidates" placeholder="One candidate per line" required></textarea>

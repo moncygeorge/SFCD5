@@ -34,6 +34,7 @@ button:disabled{opacity:.55;cursor:not-allowed}
 <div class="card">
 <p class="church">{{ election.title }}</p>
 <h1>{{ phase.position }}</h1>
+{% if ministerial_open %}<p><a href="{{ url_for('ministerial_nominate') }}">Ministerial Positions Nomination Form</a></p>{% endif %}
 <p class="instructions">Select one candidate, then submit your vote.</p>
 
 {% with messages=get_flashed_messages(with_categories=true) %}
