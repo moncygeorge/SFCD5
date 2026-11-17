@@ -943,7 +943,26 @@ def election_vote():
 
 
 # Ministerial nominations are independent of the candidate voting phases.
-MINISTERIAL_POSITIONS = [('Youth Director', ''), ('Assistant Youth Director', ''), ('Sisters Coordinator', ''), ('Sunday School Head master', ''), ('Mission Director', ''), ('Event Coordinator', ''), ('Sound Room Coordinator', 'Need Experience in Sound operation'), ('Media Coordinator', 'Computer display & Live Stream) Need to Know Malayalam & English'), ('Malayalam Choir Director', 'Leading worship & singing'), ('Malayalam Choir Assistant', ''), ('Malayalam Music Coordinator', 'Coordinating instruments & Music'), ('English Worship Lead', 'Leading worship and singing'), ('English Worship Assistant', ''), ('English Music Coordinator', 'Coordinating instruments & Music'), ('Children’s Church Coordinator', ''), ('Auditor', ''), ('Web Master -', 'To maintain our website')]
+MINISTERIAL_POSITIONS = [
+    ('Youth Director', 'Plans youth meetings and events, leads the age-group leaders and keeps parents informed.'),
+    ('Sunday School Director', "Runs Sunday School before worship: teachers, curriculum, exams and classroom safety. Holds the children's budget."),
+    ('English Worship Director 1', 'Leads English worship, schedules and rehearses the team, and trains new worship leaders. Assigns breakthrough coordinators to lead the group.'),
+    ('English Worship Director 2', 'Leads English worship, schedules and rehearses the team, and trains new worship leaders. Assigns breakthrough coordinators to lead the group.'),
+    ('Malayalam Worship Director 1', 'Leads Malayalam worship, keeps the translated song list and trains new worship leaders.'),
+    ('Malayalam Worship Director 2', 'Leads Malayalam worship, keeps the translated song list and trains new worship leaders.'),
+    ('Audio Director', 'Runs sound for every service, including mics, stage audio and the sound booth, and covers audio at funerals, weddings and rentals.'),
+    ('Video Director', 'Runs livestream, cameras, recording and slides during service, and covers video at funerals, weddings and rentals.'),
+    ('Communications Director', 'Builds the weekly slides, posts announcements, runs social media and promotes church events.'),
+    ('Hospitality Director', 'Leads greeters, ushers and food, and makes sure every first-time visitor is contacted within a week.'),
+    ('Missions & Outreach Director', 'Leads local outreach, shares missionary updates and tracks missions giving with the Treasurer.'),
+    ("Women's Ministry Director", "Holds women's meetings and Bible studies, and organizes care for women and families in need."),
+    ("Men's Ministry Director", "Holds men's meetings and fellowship, organizes service projects and connects older men with younger men."),
+    ("Children's Church Director", 'Teaches children during worship with checked adults in every room, and coordinates the nursery as needed.'),
+    ('Facilities & Event Center Manager', 'Keeps both buildings clean, safe and ready, handles repairs and runs Event Center rentals.'),
+    ('Events Coordinator', 'Coordinates food orders, keeps one church calendar, answers event requests, makes fliers and plans the big yearly events.'),
+    ('Technology Coordinator', "Keeps the website, email, Wi-Fi, Planning Center and church accounts working, secure and in the church's name."),
+    ('Auditor', 'Conduct regular audits of church financial records, including income, expenses, donations, and bank statements, to ensure accuracy and transparency.'),
+]
 
 def ensure_ministerial_tables():
     conn = get_db()
