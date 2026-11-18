@@ -1165,53 +1165,80 @@ def admin_reset_test_phone(eid):
 def admin_reset_ministerial_test_phone(eid):
     if not admin_required():
         return redirect(url_for('admin_login'))
-    variants, _ = voter_phone_variants(request.form.get('phone', ''))
-    if not variants:
+
+    _, normalized = voter_phone_variants(request.form.get('phone', ''))
+    if not normalized:
         flash('Enter a valid US phone number.', 'danger')
         return redirect(url_for('admin_dashboard'))
 
     conn = get_db()
-    voter_id = None
-    removed = 0
     try:
         conn.execute('BEGIN IMMEDIATE')
-        election = conn.execute('SELECT mode FROM election_sessions WHERE id=?', (eid,)).fetchone()
+        election = conn.execute(
+            'SELECT mode FROM election_sessions WHERE id=?', (eid,)
+        ).fetchone()
         if not election:
             conn.rollback()
             return 'Election not found', 404
         if election['mode'] != 'test':
             conn.rollback()
-            flash('Ministerial nomination resets are disabled in Live Mode.', 'danger')
+            flash('Phone resets are disabled in Live Mode.', 'danger')
             return redirect(url_for('admin_dashboard'))
-        round_ = ministerial_round(conn, eid)
-        if not round_:
-            conn.rollback()
-            flash('No ministerial nomination round exists for this election.', 'warning')
-            return redirect(url_for('admin_dashboard'))
-        for phone in variants:
-            voter = conn.execute('SELECT id FROM users WHERE phone_number=?', (phone,)).fetchone()
-            if voter:
-                voter_id = voter['id']
-                break
-        if voter_id is None:
+
+        # Match every registered voter record with this normalized phone number.
+        voters = conn.execute('SELECT id, phone_number FROM users').fetchall()
+        voter_ids = [
+            row['id'] for row in voters
+            if normalize_us_phone(row['phone_number']) == normalized
+        ]
+        if not voter_ids:
             conn.rollback()
             flash('Phone number is not registered.', 'warning')
             return redirect(url_for('admin_dashboard'))
-        submissions = conn.execute('SELECT id FROM ministerial_submissions WHERE round_id=? AND voter_id=?', (round_['id'], voter_id)).fetchall()
-        for submission in submissions:
-            conn.execute('DELETE FROM ministerial_nominations WHERE submission_id=?', (submission['id'],))
-            removed += conn.execute('DELETE FROM ministerial_submissions WHERE id=?', (submission['id'],)).rowcount
+
+        placeholders = ','.join('?' for _ in voter_ids)
+        round_ = ministerial_round(conn, eid)
+        nominations_removed = 0
+        if round_:
+            submissions = conn.execute(
+                f'SELECT id FROM ministerial_submissions '
+                f'WHERE round_id=? AND voter_id IN ({placeholders})',
+                [round_['id'], *voter_ids]
+            ).fetchall()
+            for submission in submissions:
+                conn.execute(
+                    'DELETE FROM ministerial_nominations WHERE submission_id=?',
+                    (submission['id'],)
+                )
+                nominations_removed += conn.execute(
+                    'DELETE FROM ministerial_submissions WHERE id=?',
+                    (submission['id'],)
+                ).rowcount
+
+        votes_removed = conn.execute(
+            f'DELETE FROM election_test_votes '
+            f'WHERE voter_id IN ({placeholders}) AND phase_id IN '
+            f'(SELECT id FROM election_phases WHERE session_id=?)',
+            [*voter_ids, eid]
+        ).rowcount
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
-    election_audit('MINISTERIAL_TEST_PHONE_RESET', 'admin', eid, None,
-                   f'voter_id={voter_id}; submissions_deleted={removed}')
-    flash('Test nomination reset. This voter can submit again.' if removed else
-          'No nomination submission found for this phone in this election.',
-          'success' if removed else 'warning')
+
+    election_audit(
+        'TEST_PHONE_FULL_RESET', 'admin', eid, None,
+        f'voter_ids={voter_ids}; nominations_removed={nominations_removed}; '
+        f'votes_removed={votes_removed}'
+    )
+    flash(
+        f'Phone reset complete: {nominations_removed} nomination submission(s) '
+        f'and {votes_removed} test vote(s) cleared. '
+        'The voter can submit again.',
+        'success'
+    )
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/admin/election/<int:eid>/toggle',methods=['POST'])
