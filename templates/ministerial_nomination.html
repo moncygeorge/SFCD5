@@ -27,7 +27,7 @@ button,.button{display:inline-block;border:0;background:#17324d;color:#fff;borde
 {% for category, message in messages %}<div class="flash">{{ message }}</div>{% endfor %}
 {% endwith %}
 {% if already %}
-<div class="notice"><h3>Thank you. Your nomination form has been recorded.</h3><p>If this is a test submission, an administrator can reset your nomination by phone number while the election is in Test Mode.</p></div>
+<div class="notice"><h3>Thank you. Your nomination form has been recorded.</h3></div>
 {% else %}
 <div class="notice">Enter the first and last name of a nominee for each position you wish to nominate. You may leave positions blank, but at least one nomination is required.</div>
 <form method="post" action="{{ url_for('ministerial_nominate') }}">
