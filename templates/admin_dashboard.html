@@ -15,6 +15,31 @@
 <div class="card">
 <div class="section-heading"><div><h2>{{ e.title }}</h2><p class="muted">Voting Session</p></div>
 <span class="status {{ 'status-open' if e.status == 'open' else 'status-closed' }}">{{ e.status|upper }}</span></div>
+<div style="border:1px solid #ccd3da;border-radius:10px;padding:16px;margin:16px 0">
+<h3>Election Mode: {{ e.mode|upper }}</h3>
+{% if e.mode == 'test' %}
+<p>TEST MODE — test votes are separate from live votes.</p>
+<form method="post" action="/admin/election/{{ e.id }}/reset-test-phone">
+<label>Registered phone number to reset (test votes only)</label>
+<input type="tel" name="phone" placeholder="10-digit phone number" required>
+<button type="submit">Reset Test Votes</button>
+</form>
+{% if e.status == 'closed' %}
+<form method="post" action="/admin/election/{{ e.id }}/mode" onsubmit="return confirm('Permanently activate LIVE mode? This clears test votes and cannot be reversed.');">
+<input type="hidden" name="mode" value="live"><button class="danger" type="submit">Activate LIVE Mode</button>
+</form>
+{% else %}<p>Close the election session before activating Live Mode.</p>{% endif %}
+{% else %}<p>LIVE MODE — test phone resets disabled.</p>{% endif %}
+</div>
+<div style="border:1px solid #ccd3da;border-radius:10px;padding:16px;margin:16px 0">
+<h3>Ministerial Positions — Nominations</h3>
+{% set mr = ministerial_rounds.get(e.id) %}
+<p>Status: <strong>{{ mr.status|upper if mr else 'NOT STARTED' }}</strong></p>
+<form method="post" action="/admin/election/{{ e.id }}/ministerial/toggle">
+<button type="submit">{{ 'Close Ministerial Nominations' if mr and mr.status == 'open' else 'Open Ministerial Nominations' }}</button>
+</form>
+{% if mr %}<p><a class="btn secondary" href="/admin/election/{{ e.id }}/ministerial/results">View Nomination Tally</a> <a class="btn secondary" href="/admin/election/{{ e.id }}/ministerial/results/pdf">Download Tally PDF</a></p>{% endif %}
+</div>
 <form method="post" action="/admin/election/{{ e.id }}/toggle">
 <button class="{{ 'danger' if e.status == 'open' else '' }}">{{ 'Close Entire Session' if e.status == 'open' else 'Open Voting Session' }}</button>
 </form>
