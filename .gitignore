@@ -1,0 +1,15 @@
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+
+# Local databases
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Local backup files
+*.before_*
+*.before-*
