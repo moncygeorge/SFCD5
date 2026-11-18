@@ -1161,6 +1161,59 @@ def admin_reset_test_phone(eid):
     flash(f'Test votes reset for {count} phase(s). Phone can vote again after verification.','success')
     return redirect(url_for('admin_dashboard'))
 
+@app.route('/admin/election/<int:eid>/ministerial/reset-test-phone', methods=['POST'])
+def admin_reset_ministerial_test_phone(eid):
+    if not admin_required():
+        return redirect(url_for('admin_login'))
+    variants, _ = voter_phone_variants(request.form.get('phone', ''))
+    if not variants:
+        flash('Enter a valid US phone number.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    conn = get_db()
+    voter_id = None
+    removed = 0
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        election = conn.execute('SELECT mode FROM election_sessions WHERE id=?', (eid,)).fetchone()
+        if not election:
+            conn.rollback()
+            return 'Election not found', 404
+        if election['mode'] != 'test':
+            conn.rollback()
+            flash('Ministerial nomination resets are disabled in Live Mode.', 'danger')
+            return redirect(url_for('admin_dashboard'))
+        round_ = ministerial_round(conn, eid)
+        if not round_:
+            conn.rollback()
+            flash('No ministerial nomination round exists for this election.', 'warning')
+            return redirect(url_for('admin_dashboard'))
+        for phone in variants:
+            voter = conn.execute('SELECT id FROM users WHERE phone_number=?', (phone,)).fetchone()
+            if voter:
+                voter_id = voter['id']
+                break
+        if voter_id is None:
+            conn.rollback()
+            flash('Phone number is not registered.', 'warning')
+            return redirect(url_for('admin_dashboard'))
+        submissions = conn.execute('SELECT id FROM ministerial_submissions WHERE round_id=? AND voter_id=?', (round_['id'], voter_id)).fetchall()
+        for submission in submissions:
+            conn.execute('DELETE FROM ministerial_nominations WHERE submission_id=?', (submission['id'],))
+            removed += conn.execute('DELETE FROM ministerial_submissions WHERE id=?', (submission['id'],)).rowcount
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    election_audit('MINISTERIAL_TEST_PHONE_RESET', 'admin', eid, None,
+                   f'voter_id={voter_id}; submissions_deleted={removed}')
+    flash('Test nomination reset. This voter can submit again.' if removed else
+          'No nomination submission found for this phone in this election.',
+          'success' if removed else 'warning')
+    return redirect(url_for('admin_dashboard'))
+
 @app.route('/admin/election/<int:eid>/toggle',methods=['POST'])
 def admin_toggle_election(eid):
     if not admin_required(): return redirect(url_for('admin_login'))
