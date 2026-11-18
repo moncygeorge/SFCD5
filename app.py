@@ -17,6 +17,7 @@ from reportlab.pdfgen import canvas
 from init_db import create_tables, migrate_files_to_db
 from push import save_subscription, send_push_to_all, VAPID_PUBLIC_KEY, push_configured
 from sunday_school import sunday_school
+from ministry_roles import MINISTRY_ROLES
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'change-me-in-aws')
@@ -964,6 +965,8 @@ def admin_toggle_election(eid):
 def admin_create_phase(eid):
     if not admin_required(): return redirect(url_for('admin_login'))
     position=' '.join(request.form.get('position','').strip().split())
+    if position == '__custom__':
+        position=' '.join(request.form.get('custom_position','').strip().split())
     raw=[ ' '.join(x.strip().split()) for x in request.form.get('candidates','').splitlines() if x.strip() ]
     if not position or len(raw)<2:
         flash('Position and at least two candidates are required.','danger')
@@ -1184,6 +1187,7 @@ def admin_dashboard():
     return render_template(
         'admin_dashboard.html',
         role=role,
+        ministry_roles=MINISTRY_ROLES,
         voting_open=voting_open,
         events=events,
         voting_events=voting_events,

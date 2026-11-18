@@ -25,3 +25,11 @@ Do not point a test SFCD5 instance at the live SFCD4 database unless you intenti
 
 ## Deployment safety
 Run SFCD5 on a different port/service while testing. Do not replace the live SFCD4 Nginx upstream until SFCD5 has passed smoke tests.
+
+## Ministry role election setup
+The admin dashboard's **Add Voting Phase** form now includes the SFCD ministry role catalog.
+Select a ministry role to display its responsibility summary, then enter at least two candidates
+(one per line). Choose **Other / custom position** to enter a different election position.
+The catalog includes Youth, Sunday School, English and Malayalam Worship (Director 1 and 2),
+Audio, Video, Communications, Hospitality, Missions & Outreach, Women's Ministry, Men's Ministry,
+Children's Church, Facilities & Event Center, Events, Technology, and Auditor roles.
