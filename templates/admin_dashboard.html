@@ -50,6 +50,15 @@
 <textarea name="candidates" placeholder="One candidate per line" required></textarea>
 <button>Add Phase</button>
 </form>
+{% if e.mode == 'test' %}
+<h4>Reset Test Ministerial Nomination by Phone</h4>
+<p class="muted">Removes only this voter’s ministerial nominations for this election. The voter can submit again.</p>
+<form method="post" action="/admin/election/{{ e.id }}/ministerial/reset-test-phone" onsubmit="return confirm('Reset this voter’s ministerial nominations? The previous submission and its tally will be deleted.');">
+<label for="ministerial-reset-{{ e.id }}">Registered voter phone number</label>
+<input id="ministerial-reset-{{ e.id }}" name="phone" type="tel" placeholder="10-digit US phone number" required>
+<button type="submit">Reset Test Nomination</button>
+</form>
+{% endif %}
 <h3>Voting Phases</h3>
 <div class="phase-list">
 {% for p in election_phases if p.session_id == e.id %}
