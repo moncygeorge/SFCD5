@@ -737,7 +737,15 @@ def ensure_election_tables():
       details TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    """); conn.commit(); conn.close()
+    """)
+    columns={r['name'] for r in conn.execute('PRAGMA table_info(election_sessions)')}
+    if 'mode' not in columns:
+        conn.execute("ALTER TABLE election_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'live'")
+    conn.execute("""CREATE TABLE IF NOT EXISTS election_test_votes (
+        phase_id INTEGER NOT NULL, voter_id INTEGER NOT NULL,
+        candidate_id INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(phase_id,voter_id))""")
+    conn.commit(); conn.close()
 ensure_election_tables()
 
 def election_audit(event_type, actor=None, election_id=None, phase_id=None, details=None):
@@ -776,7 +784,8 @@ def election_home():
     if not p:
         conn.close(); return render_template('election_wait.html',election=e,message='You are verified. Please wait for the next voting phase.')
     voter=session['election_voter_id']
-    voted=conn.execute("SELECT 1 FROM election_voter_status WHERE phase_id=? AND voter_id=?",(p['id'],voter)).fetchone()
+    table='election_test_votes' if e['mode']=='test' else 'election_voter_status'
+    voted=conn.execute(f"SELECT 1 FROM {table} WHERE phase_id=? AND voter_id=?",(p['id'],voter)).fetchone()
     candidates=conn.execute("SELECT id,name FROM election_candidates WHERE phase_id=? ORDER BY id",(p['id'],)).fetchall()
     conn.close()
     if voted:
@@ -932,8 +941,11 @@ def election_vote():
         conn.close(); flash('Select a valid candidate.','danger'); return redirect(url_for('election_home'))
     try:
         conn.execute("BEGIN")
-        conn.execute("INSERT INTO election_voter_status(phase_id,voter_id) VALUES(?,?)",(p['id'],voter))
-        conn.execute("INSERT INTO election_ballots(phase_id,candidate_id) VALUES(?,?)",(p['id'],cid))
+        if e['mode']=='test':
+            conn.execute("INSERT INTO election_test_votes(phase_id,voter_id,candidate_id) VALUES(?,?,?)",(p['id'],voter,cid))
+        else:
+            conn.execute("INSERT INTO election_voter_status(phase_id,voter_id) VALUES(?,?)",(p['id'],voter))
+            conn.execute("INSERT INTO election_ballots(phase_id,candidate_id) VALUES(?,?)",(p['id'],cid))
         conn.commit(); election_audit('BALLOT_CAST',f'voter:{voter}',e['id'],p['id'],'ballot accepted; candidate not logged'); flash('Your vote has been recorded.','success')
     except sqlite3.IntegrityError:
         conn.rollback(); flash('You have already voted in this phase.','warning')
@@ -945,7 +957,59 @@ def admin_create_election():
     if not admin_required(): return redirect(url_for('admin_login'))
     title=request.form.get('title','').strip()
     if not title: flash('Election title is required.','danger'); return redirect(url_for('admin_dashboard'))
-    conn=get_db(); conn.execute("INSERT INTO election_sessions(title) VALUES(?)",(title,)); conn.commit(); conn.close()
+    conn=get_db(); conn.execute("INSERT INTO election_sessions(title,mode) VALUES(?,'test')",(title,)); conn.commit(); conn.close()
+    return redirect(url_for('admin_dashboard'))
+
+# SFCD5 Test/Live election management
+@app.route('/admin/election/<int:eid>/mode',methods=['POST'])
+def admin_election_mode(eid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    if request.form.get('mode')!='live':
+        flash('Live elections cannot return to Test Mode. Create another election to test.','danger')
+        return redirect(url_for('admin_dashboard'))
+    conn=get_db(); changed=False
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        e=conn.execute('SELECT * FROM election_sessions WHERE id=?',(eid,)).fetchone()
+        if not e: return 'Election not found',404
+        if e['mode']!='test' or e['status']!='closed' or conn.execute("SELECT 1 FROM election_phases WHERE session_id=? AND status='open'",(eid,)).fetchone():
+            flash('Election must be in Test Mode and closed to activate Live Mode.','danger')
+            return redirect(url_for('admin_dashboard'))
+        conn.execute('DELETE FROM election_test_votes WHERE phase_id IN (SELECT id FROM election_phases WHERE session_id=?)',(eid,))
+        conn.execute("UPDATE election_sessions SET mode='live' WHERE id=?",(eid,))
+        conn.commit(); changed=True
+    finally: conn.close()
+    if changed: election_audit('MODE_LIVE','admin',eid,None,'Test votes cleared; live mode activated')
+    flash('Live Mode activated. Test votes cleared. Phone reset disabled.','success')
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/election/<int:eid>/reset-test-phone',methods=['POST'])
+def admin_reset_test_phone(eid):
+    if not admin_required(): return redirect(url_for('admin_login'))
+    variants,_=voter_phone_variants(request.form.get('phone',''))
+    if not variants:
+        flash('Enter a valid US phone number.','danger')
+        return redirect(url_for('admin_dashboard'))
+    conn=get_db(); count=0; voter_id=None
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        e=conn.execute('SELECT * FROM election_sessions WHERE id=?',(eid,)).fetchone()
+        if not e: return 'Election not found',404
+        if e['mode']!='test':
+            flash('Phone resets are disabled in Live Mode.','danger')
+            return redirect(url_for('admin_dashboard'))
+        for phone in variants:
+            voter=conn.execute('SELECT id FROM users WHERE phone_number=?',(phone,)).fetchone()
+            if voter:
+                voter_id=voter['id']; break
+        if voter_id is None:
+            flash('Phone number not registered.','warning')
+            return redirect(url_for('admin_dashboard'))
+        count=conn.execute('DELETE FROM election_test_votes WHERE voter_id=? AND phase_id IN (SELECT id FROM election_phases WHERE session_id=?)',(voter_id,eid)).rowcount
+        conn.commit()
+    finally: conn.close()
+    election_audit('TEST_PHONE_RESET','admin',eid,None,f'voter_id={voter_id}; test_votes_deleted={count}')
+    flash(f'Test votes reset for {count} phase(s). Phone can vote again after verification.','success')
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/admin/election/<int:eid>/toggle',methods=['POST'])
@@ -1039,6 +1103,7 @@ def admin_delete_phase(pid):
         conn.execute("BEGIN")
         # Delete anonymous ballots and voter participation records first,
         # followed by candidates and then the phase itself.
+        conn.execute("DELETE FROM election_test_votes WHERE phase_id=?", (pid,))
         conn.execute("DELETE FROM election_ballots WHERE phase_id=?", (pid,))
         conn.execute("DELETE FROM election_voter_status WHERE phase_id=?", (pid,))
         conn.execute("DELETE FROM election_candidates WHERE phase_id=?", (pid,))
@@ -1065,8 +1130,14 @@ def admin_delete_phase(pid):
 def admin_phase_results(pid):
     if not admin_required(): return redirect(url_for('admin_login'))
     conn=get_db(); p=conn.execute("SELECT * FROM election_phases WHERE id=?",(pid,)).fetchone()
-    tally=conn.execute("SELECT c.name,COUNT(b.id) cnt FROM election_candidates c LEFT JOIN election_ballots b ON b.candidate_id=c.id WHERE c.phase_id=? GROUP BY c.id,c.name ORDER BY cnt DESC, c.name COLLATE NOCASE ASC",(pid,)).fetchall()
-    total=conn.execute("SELECT COUNT(*) cnt FROM election_ballots WHERE phase_id=?",(pid,)).fetchone()['cnt']; conn.close()
+    e=conn.execute("SELECT mode FROM election_sessions WHERE id=?",(p['session_id'],)).fetchone()
+    if e['mode']=='test':
+        tally=conn.execute("SELECT c.name,COUNT(v.voter_id) cnt FROM election_candidates c LEFT JOIN election_test_votes v ON v.candidate_id=c.id AND v.phase_id=? WHERE c.phase_id=? GROUP BY c.id,c.name ORDER BY cnt DESC,c.name COLLATE NOCASE ASC",(pid,pid)).fetchall()
+        total=conn.execute("SELECT COUNT(*) cnt FROM election_test_votes WHERE phase_id=?",(pid,)).fetchone()['cnt']
+    else:
+        tally=conn.execute("SELECT c.name,COUNT(b.id) cnt FROM election_candidates c LEFT JOIN election_ballots b ON b.candidate_id=c.id WHERE c.phase_id=? GROUP BY c.id,c.name ORDER BY cnt DESC, c.name COLLATE NOCASE ASC",(pid,)).fetchall()
+        total=conn.execute("SELECT COUNT(*) cnt FROM election_ballots WHERE phase_id=?",(pid,)).fetchone()['cnt']
+    conn.close()
     return render_template('election_results.html',phase=p,tally=tally,total=total)
 
 
@@ -1180,7 +1251,10 @@ def admin_dashboard():
     """).fetchall()
     voting_events = conn.execute("SELECT ve.*, COUNT(v.id) AS vote_count FROM voting_events ve LEFT JOIN voting_event_votes v ON v.event_id=ve.id GROUP BY ve.id ORDER BY ve.created_at DESC").fetchall()
     election_sessions = conn.execute("SELECT * FROM election_sessions ORDER BY id DESC").fetchall()
-    election_phases = conn.execute("SELECT p.*,COUNT(v.id) vote_count FROM election_phases p LEFT JOIN election_voter_status v ON v.phase_id=p.id GROUP BY p.id ORDER BY p.id").fetchall()
+    election_phases = conn.execute("""SELECT p.*,
+      CASE WHEN e.mode='test' THEN (SELECT COUNT(*) FROM election_test_votes v WHERE v.phase_id=p.id)
+      ELSE (SELECT COUNT(*) FROM election_voter_status v WHERE v.phase_id=p.id) END vote_count
+      FROM election_phases p JOIN election_sessions e ON e.id=p.session_id ORDER BY p.id""").fetchall()
     registered_voter_count = conn.execute("SELECT COUNT(*) cnt FROM users").fetchone()['cnt']
     conn.close()
 
